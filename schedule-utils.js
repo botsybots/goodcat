@@ -2,6 +2,8 @@ import { getDayKey, localDateKey, parseLocalDate, weekStartDate } from './date-u
 
 const WEEKLY_TARGET_SCHEDULES = ['twice', 'three', 'four'];
 
+export const LABEL_CATEGORIES = ['Health', 'Fitness', 'Education', 'Home', 'Money', 'Social', 'Relationship'];
+
 // "Twice/three/four a week" schedules are satisfied by completing the habit
 // on any N days of the week — they are not pinned to specific weekdays.
 // Missed-day and streak tracking for these therefore has to happen per week

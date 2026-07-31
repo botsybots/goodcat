@@ -42,12 +42,18 @@
         </div>
         <button id="settingsBtn" class="icon-button" aria-label="Open settings">⚙️</button>
         </header>
+      <section id="suggestionsSection" class="suggestions-section hidden">
+        <h3>💌 Suggested for you</h3>
+        <div id="suggestionsList"></div>
+      </section>
+
       <main class="user-columns">
         <section class="user-panel">
           <div class="panel-header">
             <div>
               <h2>Anna</h2>
               <p class="lives-badge">Lives <span id="lives-anna">9 / 9</span></p>
+              <p class="level-badge" id="level-anna"></p>
             </div>
           </div>
           <div class="council-banner hidden" id="council-anna">
@@ -61,6 +67,7 @@
             <div>
               <h2>Jordan</h2>
               <p class="lives-badge">Lives <span id="lives-jordan">9 / 9</span></p>
+              <p class="level-badge" id="level-jordan"></p>
             </div>
           </div>
           <div class="council-banner hidden" id="council-jordan">
@@ -73,6 +80,10 @@
 
       <button id="addButton" class="fab" aria-label="Add commitment">+</button>
 
+      <div id="celebrationOverlay" class="celebration-overlay hidden">
+        <div class="celebration-text" id="celebrationText"></div>
+      </div>
+
       <div id="settingsPanel" class="panel-modal hidden">
         <div class="panel-content">
           <button id="settingsClose" class="close-btn" aria-label="Close settings">✕</button>
@@ -82,6 +93,10 @@
               <button id="btnLogout" type="button" style="display:none">Logout</button>
               <button id="btnSync" type="button">Sync</button>
             </div>
+          </div>
+          <div class="settings-group">
+            <button id="btnSuggest" type="button">💌 Suggest a commitment</button>
+            <button id="btnLeaderboard" type="button">🏆 Weekly leaderboard</button>
           </div>
           <div class="settings-group">
             <button id="btnEnableNotify" type="button">Enable Notifications</button>
@@ -162,10 +177,12 @@
               <option value="Health">🩺 Health</option>
               <option value="Fitness">💪 Fitness</option>
               <option value="Education">📚 Education</option>
-              <option value="Cleanliness">🧹 Cleanliness</option>
+              <option value="Home">🏠 Home</option>
+              <option value="Money">💰 Money</option>
+              <option value="Social">🎉 Social</option>
               <option value="Relationship">💞 Relationship</option>
             </select>
-            <input id="commitTarget" class="small-input" placeholder="Target streak days" type="number" min="1" />
+            <input id="commitTarget" class="small-input" placeholder="Target streak days" type="number" min="1" style="display:none" />
             <label class="full-width small muted" for="commitStartDate">Start on (optional — leave blank to start today)</label>
             <input id="commitStartDate" class="small-input" type="date" />
             <label class="toggle-switch small" style="display:none"><input type="checkbox" id="commitReminderEnabled" /><span class="toggle-slider"></span><span class="toggle-label">Reminder</span></label>
@@ -174,6 +191,56 @@
             <button type="submit" class="full-width">Add Commitment</button>
           </form>
           <p class="small muted">You can add a reminder time or pause a commitment later from its ⋯ menu.</p>
+        </div>
+      </div>
+
+      <div id="suggestModal" class="panel-modal hidden">
+        <div class="panel-content">
+          <button id="suggestClose" class="close-btn" aria-label="Close suggest commitment">✕</button>
+          <h2 id="suggestModalTitle">Suggest a Commitment</h2>
+          <p class="small muted" id="suggestModalHint">Propose something for your partner — they can accept, tweak it, or say no thanks.</p>
+          <form id="suggestForm" class="form-grid">
+            <input id="suggestText" class="full-width" placeholder="e.g. Take a walk together" required />
+            <select id="suggestSchedule" class="full-width">
+              <option value="daily">Daily</option>
+              <option value="weekdays">Weekdays (Mon–Fri)</option>
+              <option value="twice">Twice a week</option>
+              <option value="three">Three times a week</option>
+              <option value="four">Four times a week</option>
+              <option value="custom">Custom</option>
+            </select>
+            <div id="suggestCustomDays" style="display:none;" class="custom-days full-width">
+              <label class="small muted">Select days</label>
+              <div class="days">
+                <label><input type="checkbox" name="suggestDay" value="mon"/><span>Mon</span></label>
+                <label><input type="checkbox" name="suggestDay" value="tue"/><span>Tue</span></label>
+                <label><input type="checkbox" name="suggestDay" value="wed"/><span>Wed</span></label>
+                <label><input type="checkbox" name="suggestDay" value="thu"/><span>Thu</span></label>
+                <label><input type="checkbox" name="suggestDay" value="fri"/><span>Fri</span></label>
+                <label><input type="checkbox" name="suggestDay" value="sat"/><span>Sat</span></label>
+                <label><input type="checkbox" name="suggestDay" value="sun"/><span>Sun</span></label>
+              </div>
+            </div>
+            <select id="suggestLabel" class="full-width">
+              <option value="">No label</option>
+              <option value="Health">🩺 Health</option>
+              <option value="Fitness">💪 Fitness</option>
+              <option value="Education">📚 Education</option>
+              <option value="Home">🏠 Home</option>
+              <option value="Money">💰 Money</option>
+              <option value="Social">🎉 Social</option>
+              <option value="Relationship">💞 Relationship</option>
+            </select>
+            <button type="submit" class="full-width" id="suggestSubmitBtn">Send Suggestion</button>
+          </form>
+        </div>
+      </div>
+
+      <div id="leaderboardModal" class="panel-modal hidden">
+        <div class="panel-content">
+          <button id="leaderboardClose" class="close-btn" aria-label="Close leaderboard">✕</button>
+          <h2>🏆 This Week</h2>
+          <div id="leaderboardBody"></div>
         </div>
       </div>
 

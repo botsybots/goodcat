@@ -42,6 +42,8 @@ async function migrate() {
 
   const userCols = await columnNames('users');
   if (!userCols.includes('lastEndOfDaySent')) await dbRun('ALTER TABLE users ADD COLUMN lastEndOfDaySent TEXT');
+  if (!userCols.includes('lastWeeklyCategoryCheck')) await dbRun('ALTER TABLE users ADD COLUMN lastWeeklyCategoryCheck TEXT');
+  if (!userCols.includes('xp')) await dbRun('ALTER TABLE users ADD COLUMN xp INTEGER DEFAULT 0');
 
   await dbRun(`CREATE TABLE IF NOT EXISTS commitments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,6 +77,10 @@ async function migrate() {
   for (const [col, def] of Object.entries(wantedCommitmentCols)) {
     if (!commitmentCols.includes(col)) await dbRun(`ALTER TABLE commitments ADD COLUMN ${col} ${def}`);
   }
+
+  // "Cleanliness" was renamed to "Home" -- one-time backfill so existing rows
+  // keep matching a real option in the (now fixed) label dropdown.
+  await dbRun("UPDATE commitments SET label = 'Home' WHERE label = 'Cleanliness'");
 
   // Completion history (date strings YYYY-MM-DD), one row per commitment/day.
   await dbRun(`CREATE TABLE IF NOT EXISTS completion_log (
@@ -120,6 +126,22 @@ async function migrate() {
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(commitment_id) REFERENCES commitments(id),
     FOREIGN KEY(user_id) REFERENCES users(id)
+  )`);
+
+  // One person proposing a commitment for the other -- sits pending until
+  // accepted (as-is or amended), or rejected.
+  await dbRun(`CREATE TABLE IF NOT EXISTS commitment_suggestions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_user_id INTEGER,
+    to_user_id INTEGER,
+    text TEXT,
+    schedule TEXT,
+    scheduleDays TEXT,
+    label TEXT,
+    status TEXT DEFAULT 'pending',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(from_user_id) REFERENCES users(id),
+    FOREIGN KEY(to_user_id) REFERENCES users(id)
   )`);
 }
 

@@ -5,7 +5,7 @@ import jwt from 'jsonwebtoken';
 import cors from 'cors';
 import webpush from 'web-push';
 import { dbAll, dbGet, dbRun } from './db.js';
-import { isScheduledDay, computeStreak } from '../schedule-utils.js';
+import { isScheduledDay, computeStreak, LABEL_CATEGORIES } from '../schedule-utils.js';
 import { localDateKey } from '../date-utils.js';
 
 const app = express();
@@ -115,6 +115,27 @@ app.post('/api/login', async (req,res)=>{
   }
 });
 
+// Current user's XP (levels are computed client-side from this number).
+app.get('/api/me', authMiddleware, async (req,res)=>{
+  try{
+    const row = await dbGet('SELECT xp FROM users WHERE id = ?', [req.user.id]);
+    res.json({ id: req.user.id, name: req.user.name, xp: row ? (row.xp || 0) : 0 });
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
+});
+
+// Both people's XP, so each phone can show a level badge on both panels
+// (mirrors how Lives is already shown for both people on either device).
+app.get('/api/users', authMiddleware, async (req,res)=>{
+  try{
+    const rows = await dbAll('SELECT id, name, xp FROM users');
+    res.json(rows.map(r => ({ id: r.id, name: r.name, xp: r.xp || 0 })));
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
+});
+
 // Returns commitments for BOTH people, not just the caller's own -- this is a
 // two-person shared app, and the whole point of paws/comments is that each
 // person can see and react to the other's habits. Editing stays restricted
@@ -195,7 +216,7 @@ app.put('/api/commitments/:id', authMiddleware, async (req,res)=>{
     // history using the same computeStreak() the client uses, so the two
     // never disagree.
     if (doneToday !== undefined) {
-      const row = await dbGet('SELECT schedule, scheduleDays, target, achieved, achievedAt FROM commitments WHERE id = ? AND user_id = ?', [id, req.user.id]);
+      const row = await dbGet('SELECT schedule, scheduleDays, target, achieved, achievedAt, doneToday FROM commitments WHERE id = ? AND user_id = ?', [id, req.user.id]);
       if(!row) return res.status(404).json({ error: 'not found' });
       const today = localDateKey(new Date());
       const effectiveScheduleDays = scheduleDays !== undefined ? scheduleDays : (row.scheduleDays ? JSON.parse(row.scheduleDays) : null);
@@ -225,7 +246,21 @@ app.put('/api/commitments/:id', authMiddleware, async (req,res)=>{
         'UPDATE commitments SET text = ?, enabled = ?, doneToday = ?, schedule = ?, scheduleDays = ?, reminderEnabled = ?, reminderTime = ?, weeklyTarget = ?, streak = ?, lastDone = ?, label = ?, target = ?, achieved = ?, achievedAt = ?, createdAt = COALESCE(?, createdAt) WHERE id = ? AND user_id = ?',
         [text, enabled?1:0, doneToday?1:0, schedule||row.schedule||null, effectiveScheduleDaysJson, reminderEnabled?1:0, reminderTime||null, weeklyTarget||null, newStreak, newLast, label||null, targetVal||null, achieved?1:0, achievedAt, createdAt||null, id, req.user.id]
       );
-      res.json({ success:true, streak:newStreak, lastDone:newLast, achieved, achievedAt });
+
+      // XP only moves on an actual done/undone transition, not a resend of
+      // the same state -- avoids double-counting from retried pushes.
+      const wasDone = !!row.doneToday;
+      let xp = null;
+      if(doneToday && !wasDone){
+        await dbRun('UPDATE users SET xp = COALESCE(xp,0) + 10 WHERE id = ?', [req.user.id]);
+      } else if(!doneToday && wasDone){
+        await dbRun('UPDATE users SET xp = MAX(0, COALESCE(xp,0) - 10) WHERE id = ?', [req.user.id]);
+      }
+      if(doneToday !== wasDone){
+        const xpRow = await dbGet('SELECT xp FROM users WHERE id = ?', [req.user.id]);
+        xp = xpRow ? xpRow.xp : null;
+      }
+      res.json({ success:true, streak:newStreak, lastDone:newLast, achieved, achievedAt, xp });
     } else {
       await dbRun(
         'UPDATE commitments SET text = ?, enabled = ?, schedule = ?, scheduleDays = ?, reminderEnabled = ?, reminderTime = ?, weeklyTarget = ?, label = ?, target = ?, createdAt = COALESCE(?, createdAt) WHERE id = ? AND user_id = ?',
@@ -327,6 +362,130 @@ app.get('/api/commitments/:id/comments', authMiddleware, async (req,res)=>{
   }
 });
 
+// Propose a commitment for the other person (this app is exactly two
+// people, so "the other person" is just whoever isn't the caller).
+app.post('/api/suggestions', authMiddleware, async (req,res)=>{
+  const { text, schedule, scheduleDays, label } = req.body;
+  if(!text || !text.trim()) return res.status(400).json({ error: 'text required' });
+  try{
+    const toUser = await dbGet('SELECT id, name FROM users WHERE id != ?', [req.user.id]);
+    if(!toUser) return res.status(400).json({ error: 'no one to suggest this to yet' });
+    const scheduleDaysJson = scheduleDays ? JSON.stringify(scheduleDays) : null;
+    const result = await dbRun(
+      'INSERT INTO commitment_suggestions (from_user_id, to_user_id, text, schedule, scheduleDays, label, status) VALUES (?,?,?,?,?,?,\'pending\')',
+      [req.user.id, toUser.id, text.trim(), schedule || 'daily', scheduleDaysJson, label || null]
+    );
+    const rows = await dbAll('SELECT subscription FROM push_subscriptions WHERE user_id = ?', [toUser.id]);
+    if(rows.length){
+      const payload = JSON.stringify({ title: 'Good Cat 🐾', body: `${req.user.name} suggested a commitment: "${text.trim()}"`, tag: 'suggestion-' + result.lastID });
+      sendPushToSubscriptions(rows, payload).catch(()=>{});
+    }
+    res.json({ id: result.lastID, toUserId: toUser.id, toUserName: toUser.name });
+  }catch(e){
+    console.error('POST /api/suggestions error', e);
+    res.status(500).json({ error: 'db' });
+  }
+});
+
+// Suggestions waiting on ME to accept/amend/reject.
+app.get('/api/suggestions', authMiddleware, async (req,res)=>{
+  try{
+    const rows = await dbAll(`
+      SELECT s.id, s.text, s.schedule, s.scheduleDays, s.label, s.created_at as createdAt, u.name as fromName
+      FROM commitment_suggestions s JOIN users u ON u.id = s.from_user_id
+      WHERE s.to_user_id = ? AND s.status = 'pending'
+      ORDER BY s.created_at ASC
+    `, [req.user.id]);
+    res.json(rows.map(r => ({
+      id: r.id, text: r.text, schedule: r.schedule || 'daily',
+      scheduleDays: r.scheduleDays ? JSON.parse(r.scheduleDays) : null,
+      label: r.label || null, createdAt: r.createdAt, fromName: r.fromName
+    })));
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
+});
+
+// Accept as-is, or with overrides from an "amend and accept" edit -- either
+// way it becomes a real commitment owned by the recipient.
+app.post('/api/suggestions/:id/accept', authMiddleware, async (req,res)=>{
+  const id = req.params.id;
+  try{
+    const suggestion = await dbGet('SELECT * FROM commitment_suggestions WHERE id = ? AND to_user_id = ? AND status = \'pending\'', [id, req.user.id]);
+    if(!suggestion) return res.status(404).json({ error: 'not found' });
+    const overrides = req.body || {};
+    const text = (overrides.text || suggestion.text || '').trim();
+    const schedule = overrides.schedule || suggestion.schedule || 'daily';
+    const scheduleDays = overrides.scheduleDays !== undefined ? overrides.scheduleDays : (suggestion.scheduleDays ? JSON.parse(suggestion.scheduleDays) : null);
+    const label = overrides.label !== undefined ? overrides.label : suggestion.label;
+    const scheduleDaysJson = scheduleDays ? JSON.stringify(scheduleDays) : null;
+    const weeklyTarget = schedule === 'twice' ? 2 : (schedule === 'three' ? 3 : (schedule === 'four' ? 4 : null));
+    const createdAtVal = localDateKey(new Date());
+    const result = await dbRun(
+      'INSERT INTO commitments (user_id,text,enabled,doneToday,schedule,scheduleDays,weeklyTarget,streak,lastDone,label,createdAt) VALUES (?,?,1,0,?,?,?,0,NULL,?,?)',
+      [req.user.id, text, schedule, scheduleDaysJson, weeklyTarget, label || null, createdAtVal]
+    );
+    await dbRun('DELETE FROM commitment_suggestions WHERE id = ?', [id]);
+    res.json({
+      id: result.lastID, text, enabled: true, doneToday: false, schedule, scheduleDays,
+      weeklyTarget, streak: 0, lastDone: null, label: label || null, createdAt: createdAtVal
+    });
+  }catch(e){
+    console.error('POST /api/suggestions/:id/accept error', e);
+    res.status(500).json({ error: 'db' });
+  }
+});
+
+app.post('/api/suggestions/:id/reject', authMiddleware, async (req,res)=>{
+  const id = req.params.id;
+  try{
+    const owned = await dbGet('SELECT id FROM commitment_suggestions WHERE id = ? AND to_user_id = ?', [id, req.user.id]);
+    if(!owned) return res.status(404).json({ error: 'not found' });
+    await dbRun('DELETE FROM commitment_suggestions WHERE id = ?', [id]);
+    res.json({ success: true });
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
+});
+
+// This week's completion rate per person, Mon-Sun, for the leaderboard.
+app.get('/api/leaderboard/weekly', authMiddleware, async (req,res)=>{
+  try{
+    const now = new Date();
+    const day = (now.getDay() + 6) % 7; // 0=Mon..6=Sun
+    const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day);
+    const weekDates = Array.from({length:7}, (_,i)=>{
+      const d = new Date(monday); d.setDate(monday.getDate()+i); return localDateKey(d);
+    });
+    const todayKey = localDateKey(now);
+    const weekDatesSoFar = weekDates.filter(d => d <= todayKey);
+
+    const users = await dbAll('SELECT id, name FROM users');
+    const result = {};
+    for(const user of users){
+      const commits = await dbAll('SELECT id, schedule, scheduleDays FROM commitments WHERE user_id = ? AND enabled = 1', [user.id]);
+      let scheduled = 0, completed = 0;
+      for(const c of commits){
+        const scheduleDays = c.scheduleDays ? JSON.parse(c.scheduleDays) : null;
+        const dueDates = weekDatesSoFar.filter(d => isScheduledDay({ schedule: c.schedule, scheduleDays }, d));
+        if(!dueDates.length) continue;
+        scheduled += dueDates.length;
+        const rows = await dbAll(
+          `SELECT date FROM completion_log WHERE commitment_id = ? AND date IN (${dueDates.map(()=>'?').join(',')})`,
+          [c.id, ...dueDates]
+        );
+        completed += rows.length;
+      }
+      const rate = scheduled > 0 ? completed / scheduled : null;
+      result[user.name.toLowerCase()] = { scheduled, completed, rate, hitTarget: scheduled > 0 && completed >= scheduled };
+    }
+    res.json({ weekStart: weekDates[0], users: result });
+  }catch(e){
+    console.error('GET /api/leaderboard/weekly error', e);
+    res.status(500).json({ error: 'db' });
+  }
+});
+
 function shouldSendReminder(commit, now){
   if(!commit.reminderEnabled || !commit.reminderTime || !commit.enabled) return false;
   const todayKey = localDateKey(now);
@@ -369,7 +528,7 @@ checkDueReminders();
 // only fires if something scheduled for today is still unmarked, and only
 // once/day (tracked via users.lastEndOfDaySent) regardless of whether a
 // push subscription existed to actually deliver it.
-const END_OF_DAY_HOUR = 20;
+const END_OF_DAY_HOUR = 22;
 async function checkEndOfDayReminders(){
   const now = new Date();
   if(now.getHours() !== END_OF_DAY_HOUR || now.getMinutes() !== 0) return;
@@ -394,6 +553,41 @@ async function checkEndOfDayReminders(){
 
 setInterval(checkEndOfDayReminders, 60 * 1000);
 checkEndOfDayReminders();
+
+// Once a week (Sunday evening), nudge anyone with a completely empty
+// category -- e.g. nothing at all labeled "Home" -- so gaps in the habit
+// spread don't go unnoticed indefinitely. Tracked via
+// users.lastWeeklyCategoryCheck (the week's Monday date) so it only fires once.
+async function checkWeeklyCategoryGaps(){
+  const now = new Date();
+  if(now.getDay() !== 0 || now.getHours() !== 18 || now.getMinutes() !== 0) return; // Sunday 6pm
+  const day = (now.getDay() + 6) % 7;
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day);
+  const weekStartIso = localDateKey(monday);
+  try{
+    const users = await dbAll('SELECT id, lastWeeklyCategoryCheck FROM users');
+    for(const user of users){
+      if(user.lastWeeklyCategoryCheck === weekStartIso) continue;
+      await dbRun('UPDATE users SET lastWeeklyCategoryCheck = ? WHERE id = ?', [weekStartIso, user.id]);
+      const rows = await dbAll('SELECT DISTINCT label FROM commitments WHERE user_id = ? AND enabled = 1 AND label IS NOT NULL', [user.id]);
+      const present = new Set(rows.map(r => r.label));
+      const missing = LABEL_CATEGORIES.filter(l => !present.has(l));
+      if(!missing.length) continue;
+      const subs = await dbAll('SELECT subscription FROM push_subscriptions WHERE user_id = ?', [user.id]);
+      if(!subs.length) continue;
+      const body = missing.length === 1
+        ? `You haven't committed to anything in ${missing[0]}.`
+        : `You haven't committed to anything in: ${missing.join(', ')}.`;
+      const payload = JSON.stringify({ title: 'Good Cat 🐾', body, tag: 'weekly-category-gap' });
+      await sendPushToSubscriptions(subs, payload);
+    }
+  }catch(e){
+    console.error('checkWeeklyCategoryGaps error', e);
+  }
+}
+
+setInterval(checkWeeklyCategoryGaps, 60 * 1000);
+checkWeeklyCategoryGaps();
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, ()=>console.log('API listening on', PORT));

@@ -1,5 +1,5 @@
 import { localDateKey, parseLocalDate, nextLocalDate, prevLocalDate, getDayKey, weekStartDate } from './date-utils.js';
-import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCompletionsThisWeek, computeStreak, computeWeeklyStreak } from './schedule-utils.js';
+import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCompletionsThisWeek, computeStreak, computeWeeklyStreak, LABEL_CATEGORIES } from './schedule-utils.js';
 
 // Simple Accountability App (localStorage-backed)
 (function(){
@@ -10,7 +10,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
 
   const STORAGE_KEY = 'accountability:data:v1';
   const DEFAULT_API_BASE = 'https://goodcat-api.onrender.com';
-  const LABEL_ICONS = { Health: '🩺', Fitness: '💪', Education: '📚', Cleanliness: '🧹', Relationship: '💞' };
+  const LABEL_ICONS = { Health: '🩺', Fitness: '💪', Education: '📚', Home: '🏠', Money: '💰', Social: '🎉', Relationship: '💞' };
 
   function load(){
     try{
@@ -30,6 +30,16 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   let state = load();
   let currentUser = state.users[0].id || 'anna';
   let editingCommitId = null;
+
+  // "Cleanliness" was renamed to "Home" -- keep old local data matching the
+  // current label set instead of leaving it stranded as an unrecognized value.
+  (function migrateCleanlinessLabel(){
+    let changed = false;
+    for(const c of state.commitments || []){
+      if(c.label === 'Cleanliness'){ c.label = 'Home'; changed = true; }
+    }
+    if(changed) save(state);
+  })();
 
   // DOM refs
   const commitFor = document.getElementById('commitFor');
@@ -84,9 +94,50 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   const loginStatus = document.getElementById('loginStatus');
   const authGate = document.getElementById('authGate');
   const authGateStatus = document.getElementById('authGateStatus');
+  const levelAnna = document.getElementById('level-anna');
+  const levelJordan = document.getElementById('level-jordan');
+  const suggestionsSection = document.getElementById('suggestionsSection');
+  const suggestionsList = document.getElementById('suggestionsList');
+  const btnSuggest = document.getElementById('btnSuggest');
+  const suggestModal = document.getElementById('suggestModal');
+  const suggestClose = document.getElementById('suggestClose');
+  const suggestForm = document.getElementById('suggestForm');
+  const suggestText = document.getElementById('suggestText');
+  const suggestSchedule = document.getElementById('suggestSchedule');
+  const suggestCustomDays = document.getElementById('suggestCustomDays');
+  const suggestLabel = document.getElementById('suggestLabel');
+  const suggestSubmitBtn = document.getElementById('suggestSubmitBtn');
+  const suggestModalTitle = document.getElementById('suggestModalTitle');
+  const suggestModalHint = document.getElementById('suggestModalHint');
+  const btnLeaderboard = document.getElementById('btnLeaderboard');
+  const leaderboardModal = document.getElementById('leaderboardModal');
+  const leaderboardClose = document.getElementById('leaderboardClose');
+  const leaderboardBody = document.getElementById('leaderboardBody');
+  const celebrationOverlay = document.getElementById('celebrationOverlay');
+  const celebrationText = document.getElementById('celebrationText');
   const START_LIVES = 9;
   const MAX_LIVES = 9;
   const RESET_LIVES_AFTER_COUNCIL = 3;
+
+  // XP/leveling -- "some other members of the species" filled in between
+  // Big Botson and Tiger per Anna's list, ending at Lion as the top tier.
+  const LEVELS = [
+    { name: 'Baby Cat', xp: 0 },
+    { name: 'Kitten', xp: 50 },
+    { name: 'Little One', xp: 150 },
+    { name: 'Adult Cat', xp: 300 },
+    { name: 'Big Botson', xp: 500 },
+    { name: 'Bobcat', xp: 750 },
+    { name: 'Panther', xp: 1050 },
+    { name: 'Cougar', xp: 1400 },
+    { name: 'Tiger', xp: 1800 },
+    { name: 'Lion', xp: 2300 }
+  ];
+  function levelForXp(xp){
+    let current = LEVELS[0];
+    for(const l of LEVELS){ if(xp >= l.xp) current = l; }
+    return current;
+  }
 
   function decodeJwtPayload(token){
     try{
@@ -167,6 +218,96 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     if(Notification.permission === 'granted'){
       try{ new Notification(title, { body }); }catch(e){ showToast(title, body); }
     } else showToast(title, body);
+  }
+
+  // Big celebratory moment for completing a habit -- separate from the
+  // small corner toast, which is still used for lower-stakes stuff (life
+  // gains/losses, sync errors, etc).
+  const FIREWORK_COLORS = ['#b5541f', '#4b5d40', '#e0a458', '#8a3f16', '#dbe3d0', '#c9682c'];
+  function launchFireworks(){
+    for(let burst = 0; burst < 3; burst += 1){
+      setTimeout(()=>{
+        const cx = 20 + Math.random() * 60;
+        const cy = 20 + Math.random() * 40;
+        const count = 16;
+        for(let i = 0; i < count; i += 1){
+          const angle = (Math.PI * 2 * i) / count;
+          const dist = 60 + Math.random() * 70;
+          const p = document.createElement('span');
+          p.className = 'firework-particle';
+          p.style.left = cx + 'vw';
+          p.style.top = cy + 'vh';
+          p.style.setProperty('--dx', Math.cos(angle) * dist + 'px');
+          p.style.setProperty('--dy', Math.sin(angle) * dist + 'px');
+          p.style.background = FIREWORK_COLORS[Math.floor(Math.random() * FIREWORK_COLORS.length)];
+          document.body.appendChild(p);
+          setTimeout(()=>p.remove(), 950);
+        }
+      }, burst * 260);
+    }
+  }
+
+  let celebrationTimer = null;
+  function hideCelebration(){
+    celebrationOverlay.classList.add('hidden');
+    if(celebrationTimer){ clearTimeout(celebrationTimer); celebrationTimer = null; }
+  }
+  function showCelebration(message, { fireworks = true } = {}){
+    celebrationText.textContent = message;
+    celebrationOverlay.classList.remove('hidden');
+    if(fireworks) launchFireworks();
+    if(celebrationTimer) clearTimeout(celebrationTimer);
+    celebrationTimer = setTimeout(hideCelebration, 2600);
+  }
+  celebrationOverlay.addEventListener('click', hideCelebration);
+
+  const FIRST_TIME_MESSAGES = [
+    task => `Nice start on "${task}"! Day one in the books. 🐾`,
+    task => `"${task}" — logged! Every streak starts somewhere.`,
+    task => `First one down for "${task}". Keep going!`
+  ];
+  const STREAK_MESSAGES = [
+    (task, n) => `🔥 ${n}-day streak with "${task}" — keep it up!`,
+    (task, n) => `You're on a roll! ${n} days strong on "${task}".`,
+    (task, n) => `Loki approves: ${n} in a row for "${task}"! 🐾`,
+    (task, n) => `${n} days and counting on "${task}" — nice work.`,
+    (task, n) => `That's ${n} straight for "${task}". Don't stop now!`,
+    (task, n) => `${n}-day streak unlocked for "${task}". Good cat. 😼`
+  ];
+  const WEEKLY_PROGRESS_MESSAGES = [
+    (task, count, target) => `${count}/${target} this week for "${task}" — nice pace!`,
+    (task, count, target) => `You're at ${count} of ${target} for "${task}" this week. Keep going!`,
+    (task, count, target) => `${count}/${target} logged for "${task}" this week. 🐾`
+  ];
+  function pick(arr){ return arr[Math.floor(Math.random() * arr.length)]; }
+
+  function celebrateCompletion(c){
+    if(isWeeklyTargetSchedule(c)){
+      const count = countCompletionsThisWeek(c, getEffectiveNow());
+      showCelebration(pick(WEEKLY_PROGRESS_MESSAGES)(c.text, count, c.weeklyTarget));
+    } else if(c.streak > 1){
+      showCelebration(pick(STREAK_MESSAGES)(c.text, c.streak));
+    } else {
+      showCelebration(pick(FIRST_TIME_MESSAGES)(c.text));
+    }
+  }
+
+  // A rare, unpredictable bonus -- not tied to any particular streak or
+  // performance, just an occasional surprise for showing up.
+  const RARE_EVENT_CHANCE = 0.05;
+  const RARE_EVENT_MESSAGES = [
+    '✨ Loki purrs approvingly and grants you a bonus life!',
+    '🌟 A rare golden paw print appears underfoot — +1 life!',
+    '🐾 The Good Cat spirit smiles on you today. Bonus life earned!',
+    '🎁 An unexpected treat from Bots — +1 life!'
+  ];
+  function maybeTriggerRareEvent(userId){
+    if(Math.random() >= RARE_EVENT_CHANCE) return;
+    ensureLifeState();
+    if(state.lives[userId] >= MAX_LIVES) return;
+    state.lives[userId] = Math.min(MAX_LIVES, state.lives[userId] + 1);
+    save(state);
+    setTimeout(()=> showCelebration(pick(RARE_EVENT_MESSAGES)), 2800);
   }
 
   function userName(id){
@@ -382,6 +523,18 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     if(councilJordan) councilJordan.classList.toggle('hidden', !(state.lives.jordan <= 0));
   }
 
+  function renderLevels(){
+    const xp = state.usersXp || {};
+    function paint(el, userId){
+      if(!el) return;
+      if(xp[userId] === undefined){ el.textContent = ''; return; }
+      const level = levelForXp(xp[userId]);
+      el.textContent = `🐾 ${level.name} · ${xp[userId]} XP`;
+    }
+    paint(levelAnna, 'anna');
+    paint(levelJordan, 'jordan');
+  }
+
   function findNextReminderDateForWeekly(commit, nowDate){
     const weeklyTarget = commit.weeklyTarget || null;
     if(!weeklyTarget) return null;
@@ -498,6 +651,16 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
         if(j.lastDone !== undefined) c.lastDone = j.lastDone;
         if(j.achieved !== undefined) c.achieved = j.achieved || c.achieved;
         if(j.achievedAt !== undefined) c.achievedAt = j.achievedAt || c.achievedAt;
+        if(j.xp !== undefined && j.xp !== null){
+          state.usersXp = state.usersXp || {};
+          const prevXp = state.usersXp[c.for] || 0;
+          const prevLevel = levelForXp(prevXp);
+          state.usersXp[c.for] = j.xp;
+          const newLevel = levelForXp(j.xp);
+          if(j.xp > prevXp && newLevel.name !== prevLevel.name){
+            setTimeout(()=> showCelebration(`🎉 ${userName(c.for)} leveled up to ${newLevel.name}!`), 2800);
+          }
+        }
         save(state);
       }
     }catch(e){ console.error('push commitment failed', e); }
@@ -517,10 +680,10 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     }
     const today = appToday();
     c.history = c.history || [];
+    const justCompleted = !c.doneToday;
     if(!c.doneToday){
       if(!c.history.includes(today)) c.history.push(today);
       c.doneToday = true;
-      showToast('Loki is pleased with ' + userName(c.for), `${c.text} was completed.`);
     } else {
       c.doneToday = false;
       const idx = c.history.indexOf(today);
@@ -538,7 +701,11 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     updateLivesForUser(c.for);
     renderList();
     scheduleReminderFor(c);
-    pushCommitmentToServer(c);
+    pushCommitmentToServer(c).then(()=>{ renderLevels(); });
+    if(justCompleted){
+      celebrateCompletion(c);
+      maybeTriggerRareEvent(c.for);
+    }
   }
 
   // Once a commitment is synced, the server is the source of truth for paw
@@ -812,6 +979,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     renderCommitmentsForUser('anna', commitListAnna);
     renderCommitmentsForUser('jordan', commitListJordan);
     renderLives();
+    renderLevels();
   }
 
   // Remote sync helpers
@@ -1029,6 +1197,28 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     for(const c of unsynced) await pushCommitmentToServer(c);
   }
 
+  async function fetchUsersXp(){
+    try{
+      const res = await fetch(apiBase() + '/api/users', { headers: { authorization: 'Bearer '+authToken } });
+      if(!res.ok) return;
+      const list = await res.json();
+      state.usersXp = state.usersXp || {};
+      for(const u of list) state.usersXp[(u.name||'').toLowerCase()] = u.xp || 0;
+      save(state);
+      renderLevels();
+    }catch(e){ /* non-critical */ }
+  }
+
+  async function fetchSuggestions(){
+    try{
+      const res = await fetch(apiBase() + '/api/suggestions', { headers: { authorization: 'Bearer '+authToken } });
+      if(!res.ok) return;
+      state.suggestions = await res.json();
+      save(state);
+      renderSuggestions();
+    }catch(e){ /* non-critical */ }
+  }
+
   async function runSync(){
     if(!authToken) return;
     try{
@@ -1043,6 +1233,8 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
       state.commitments = state.commitments.filter(c => !c.remoteId || remoteIds.has(c.remoteId));
       save(state);
       renderList();
+      fetchUsersXp();
+      fetchSuggestions();
     }catch(e){ console.error('sync failed', e); }
   }
 
@@ -1168,6 +1360,194 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   addButton.addEventListener('click', ()=>{ clearAddForm(); addModal.classList.remove('hidden'); });
   addClose.addEventListener('click', ()=>{ addModal.classList.add('hidden'); clearAddForm(); });
   addModal.addEventListener('click', e => { if(e.target === addModal){ addModal.classList.add('hidden'); clearAddForm(); } });
+
+  // --- Suggestions: propose a commitment for your partner, who can accept
+  // it as-is, tweak it first ("amend"), or reject it. ---
+  let suggestModalMode = 'compose';
+  let amendingSuggestionId = null;
+
+  function clearSuggestForm(){
+    suggestText.value = '';
+    suggestSchedule.value = 'daily';
+    suggestCustomDays.style.display = 'none';
+    document.querySelectorAll('#suggestCustomDays input[name="suggestDay"]').forEach(i=>i.checked=false);
+    suggestLabel.value = '';
+  }
+
+  suggestSchedule.addEventListener('change', ()=>{
+    suggestCustomDays.style.display = suggestSchedule.value === 'custom' ? 'block' : 'none';
+  });
+
+  btnSuggest.addEventListener('click', ()=>{
+    if(!authToken) return alert('Login first to suggest a commitment.');
+    suggestModalMode = 'compose';
+    amendingSuggestionId = null;
+    clearSuggestForm();
+    suggestModalTitle.textContent = 'Suggest a Commitment';
+    suggestModalHint.textContent = "Propose something for your partner — they can accept, tweak it, or say no thanks.";
+    suggestSubmitBtn.textContent = 'Send Suggestion';
+    settingsPanel.classList.add('hidden');
+    suggestModal.classList.remove('hidden');
+  });
+
+  suggestClose.addEventListener('click', ()=>{ suggestModal.classList.add('hidden'); clearSuggestForm(); });
+  suggestModal.addEventListener('click', e => { if(e.target === suggestModal){ suggestModal.classList.add('hidden'); clearSuggestForm(); } });
+
+  function addAcceptedSuggestionLocally(commit){
+    state.commitments.push({
+      id: 'r'+commit.id, remoteId: commit.id, for: currentUser, text: commit.text,
+      enabled: commit.enabled, doneToday: commit.doneToday, schedule: commit.schedule,
+      scheduleDays: commit.scheduleDays, weeklyTarget: commit.weeklyTarget, streak: commit.streak||0,
+      lastDone: commit.lastDone, label: commit.label, target: null, history: [], paws:0, comments: [],
+      createdAt: commit.createdAt, pawLog: []
+    });
+    save(state);
+    renderList();
+  }
+
+  suggestForm.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    if(!authToken) return;
+    const text = suggestText.value.trim();
+    if(!text) return;
+    const schedule = suggestSchedule.value || 'daily';
+    let scheduleDays = null;
+    if(schedule === 'custom'){
+      scheduleDays = Array.from(document.querySelectorAll('#suggestCustomDays input[name="suggestDay"]:checked')).map(i=>i.value);
+      if(scheduleDays.length === 0){ alert('Select at least one day for a custom schedule'); return; }
+    }
+    const label = suggestLabel.value || null;
+    try{
+      if(suggestModalMode === 'amend' && amendingSuggestionId){
+        const res = await fetch(apiBase() + '/api/suggestions/' + amendingSuggestionId + '/accept', {
+          method: 'POST', headers: { 'content-type':'application/json', authorization: 'Bearer '+authToken },
+          body: JSON.stringify({ text, schedule, scheduleDays, label })
+        });
+        if(res.ok){
+          const commit = await res.json();
+          addAcceptedSuggestionLocally(commit);
+          state.suggestions = (state.suggestions||[]).filter(s=>s.id!==amendingSuggestionId);
+          save(state);
+          renderSuggestions();
+          showToast('Accepted', `"${commit.text}" added to your commitments.`);
+        } else {
+          showToast('Something went wrong', 'Could not save your changes.');
+        }
+      } else {
+        const res = await fetch(apiBase() + '/api/suggestions', {
+          method: 'POST', headers: { 'content-type':'application/json', authorization: 'Bearer '+authToken },
+          body: JSON.stringify({ text, schedule, scheduleDays, label })
+        });
+        showToast(res.ok ? 'Sent' : 'Something went wrong', res.ok ? 'Your suggestion is on its way.' : 'Could not send your suggestion.');
+      }
+    }catch(e){
+      showToast('Offline?', 'Could not reach the server.');
+    }
+    suggestModal.classList.add('hidden');
+    clearSuggestForm();
+  });
+
+  function renderSuggestions(){
+    const list = state.suggestions || [];
+    suggestionsList.innerHTML = '';
+    suggestionsSection.classList.toggle('hidden', list.length === 0);
+    list.forEach(s => {
+      const card = document.createElement('div'); card.className = 'suggestion-card';
+      const scheduleDesc = getScheduleDescription({ schedule: s.schedule, scheduleDays: s.scheduleDays });
+      const labelBit = s.label ? ` · ${LABEL_ICONS[s.label] || ''} ${escapeHtml(s.label)}` : '';
+      card.innerHTML = `
+        <p class="suggestion-from">From ${escapeHtml(s.fromName)}</p>
+        <p class="suggestion-text">${escapeHtml(s.text)}</p>
+        <p class="suggestion-meta">${scheduleDesc}${labelBit}</p>
+      `;
+      const actions = document.createElement('div'); actions.className = 'suggestion-actions';
+      const acceptBtn = document.createElement('button'); acceptBtn.type='button'; acceptBtn.className='primary'; acceptBtn.textContent='✅ Accept';
+      acceptBtn.addEventListener('click', ()=> acceptSuggestion(s));
+      const amendBtn = document.createElement('button'); amendBtn.type='button'; amendBtn.textContent='✏️ Amend & Accept';
+      amendBtn.addEventListener('click', ()=> openAmendSuggestion(s));
+      const rejectBtn = document.createElement('button'); rejectBtn.type='button'; rejectBtn.className='danger'; rejectBtn.textContent='✕ Reject';
+      rejectBtn.addEventListener('click', ()=> rejectSuggestion(s));
+      actions.appendChild(acceptBtn); actions.appendChild(amendBtn); actions.appendChild(rejectBtn);
+      card.appendChild(actions);
+      suggestionsList.appendChild(card);
+    });
+  }
+
+  async function acceptSuggestion(s){
+    if(!authToken) return;
+    try{
+      const res = await fetch(apiBase() + '/api/suggestions/' + s.id + '/accept', { method:'POST', headers: { authorization: 'Bearer '+authToken } });
+      if(res.ok){
+        const commit = await res.json();
+        addAcceptedSuggestionLocally(commit);
+        state.suggestions = (state.suggestions||[]).filter(x=>x.id!==s.id);
+        save(state);
+        renderSuggestions();
+        showToast('Accepted', `"${commit.text}" added to your commitments.`);
+      }
+    }catch(e){ showToast('Offline?', 'Could not reach the server.'); }
+  }
+
+  function openAmendSuggestion(s){
+    suggestModalMode = 'amend';
+    amendingSuggestionId = s.id;
+    suggestText.value = s.text;
+    suggestSchedule.value = s.schedule || 'daily';
+    if(s.schedule === 'custom' && Array.isArray(s.scheduleDays)){
+      suggestCustomDays.style.display = 'block';
+      document.querySelectorAll('#suggestCustomDays input[name="suggestDay"]').forEach(i=>{ i.checked = s.scheduleDays.includes(i.value); });
+    } else {
+      suggestCustomDays.style.display = 'none';
+    }
+    suggestLabel.value = s.label || '';
+    suggestModalTitle.textContent = 'Amend & Accept';
+    suggestModalHint.textContent = 'Tweak the details, then accept it into your own commitments.';
+    suggestSubmitBtn.textContent = 'Save & Accept';
+    suggestModal.classList.remove('hidden');
+  }
+
+  async function rejectSuggestion(s){
+    if(!authToken) return;
+    try{
+      await fetch(apiBase() + '/api/suggestions/' + s.id + '/reject', { method:'POST', headers: { authorization: 'Bearer '+authToken } });
+    }catch(e){ /* still drop it locally below */ }
+    state.suggestions = (state.suggestions||[]).filter(x=>x.id!==s.id);
+    save(state);
+    renderSuggestions();
+  }
+
+  // --- Weekly leaderboard ---
+  btnLeaderboard.addEventListener('click', async ()=>{
+    if(!authToken) return alert('Login first to see the leaderboard.');
+    settingsPanel.classList.add('hidden');
+    leaderboardBody.innerHTML = '<p class="small muted">Loading…</p>';
+    leaderboardModal.classList.remove('hidden');
+    try{
+      const res = await fetch(apiBase() + '/api/leaderboard/weekly', { headers: { authorization: 'Bearer '+authToken } });
+      if(!res.ok){ leaderboardBody.innerHTML = '<p class="small muted">Could not load the leaderboard.</p>'; return; }
+      renderLeaderboard(await res.json());
+    }catch(e){
+      leaderboardBody.innerHTML = '<p class="small muted">Could not reach the server.</p>';
+    }
+  });
+  leaderboardClose.addEventListener('click', ()=> leaderboardModal.classList.add('hidden'));
+  leaderboardModal.addEventListener('click', e => { if(e.target === leaderboardModal) leaderboardModal.classList.add('hidden'); });
+
+  function renderLeaderboard(data){
+    const users = data.users || {};
+    const names = Object.keys(users);
+    let html = names.map(name => {
+      const u = users[name];
+      const pct = u.rate === null ? '—' : Math.round(u.rate*100) + '%';
+      return `<div class="leaderboard-row"><span class="leaderboard-name">${escapeHtml(userName(name))}</span><span class="leaderboard-rate">${u.completed}/${u.scheduled} · ${pct}</span></div>`;
+    }).join('');
+    const bothHit = names.length === 2 && names.every(n => users[n].hitTarget);
+    const soloWinners = names.filter(n => users[n].hitTarget && !bothHit);
+    let banner = '';
+    if(bothHit) banner = '🎉 You both hit 100% this week — go pick a treat!';
+    else if(soloWinners.length) banner = soloWinners.map(n => `${userName(n)} hit their target this week — they get to pick your next couple activity!`).join(' ');
+    leaderboardBody.innerHTML = html + (banner ? `<div class="leaderboard-banner">${escapeHtml(banner)}</div>` : '');
+  }
 
   // show logout button if token exists
   if(authToken) btnLogout.style.display='inline';
