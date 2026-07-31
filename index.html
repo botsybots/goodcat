@@ -12,6 +12,27 @@
   </head>
   <body>
     <div class="container">
+      <div id="authGate" class="panel-modal hidden">
+        <div class="panel-content">
+          <h2>Good Cat 🐾</h2>
+          <p class="small muted">Log in as Anna or Jordan to sync with each other. If you're setting this up for the first time, register once, then just log in from now on.</p>
+          <div class="settings-group">
+            <label for="apiBase">API base</label>
+            <input id="apiBase" placeholder="http://localhost:3000" />
+          </div>
+          <div class="settings-group">
+            <label for="authName">Username</label>
+            <input id="authName" placeholder="anna or jordan" />
+            <label for="authPass">Password</label>
+            <input id="authPass" placeholder="password" type="password" />
+            <div class="settings-actions">
+              <button id="btnRegister" type="button">Register</button>
+              <button id="btnLogin" type="button">Login</button>
+            </div>
+          </div>
+          <p id="authGateStatus" class="small muted"></p>
+        </div>
+      </div>
       <header>
         <div class="title-wrap">
           <h1>Good Cat 🐾</h1>
@@ -56,18 +77,6 @@
           <button id="settingsClose" class="close-btn" aria-label="Close settings">✕</button>
           <h2>Settings</h2>
           <div class="settings-group">
-            <label for="apiBase">API base</label>
-            <input id="apiBase" placeholder="http://localhost:3000" />
-          </div>
-          <div class="settings-group">
-            <label for="authName">Username</label>
-            <input id="authName" placeholder="username" />
-            <label for="authPass">Password</label>
-            <input id="authPass" placeholder="password" type="password" />
-            <div class="settings-actions">
-              <button id="btnRegister" type="button">Register</button>
-              <button id="btnLogin" type="button">Login</button>
-            </div>
             <div class="settings-actions">
               <button id="btnLogout" type="button" style="display:none">Logout</button>
               <button id="btnSync" type="button">Sync</button>

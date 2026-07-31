@@ -348,6 +348,16 @@ button:active {
   background: var(--accent-dark);
 }
 
+#authGate button {
+  background: var(--accent);
+  color: #fff8ef;
+  border-color: var(--accent-dark);
+}
+
+#authGate button:hover {
+  background: var(--accent-dark);
+}
+
 ul {
   list-style: none;
   padding: 0;

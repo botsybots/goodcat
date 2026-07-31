@@ -79,6 +79,8 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   const addModal = document.getElementById('addModal');
   const addClose = document.getElementById('addClose');
   const loginStatus = document.getElementById('loginStatus');
+  const authGate = document.getElementById('authGate');
+  const authGateStatus = document.getElementById('authGateStatus');
   const START_LIVES = 9;
   const MAX_LIVES = 9;
   const RESET_LIVES_AFTER_COUNCIL = 3;
@@ -92,6 +94,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   }
 
   let authToken = localStorage.getItem('accountability:token') || null;
+  let syncIntervalId = null;
   if(authToken){
     apiBaseInput.value = localStorage.getItem('accountability:api') || 'http://localhost:3000';
     const payload = decodeJwtPayload(authToken);
@@ -99,6 +102,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     setToken(authToken);
   } else {
     setLoginStatus('Logged out');
+    if(authGate) authGate.classList.remove('hidden');
   }
 
   // Notification controls
@@ -843,25 +847,47 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     }
   }
 
+  function setAuthGateStatus(text){
+    if(authGateStatus) authGateStatus.textContent = text || '';
+  }
+
   async function register(){
     const name = authName.value.trim();
     const password = authPass.value;
-    if(!name||!password) return alert('enter name+password');
-    const res = await fetch(apiBase() + '/api/register', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ name, password }) });
-    const j = await res.json();
-    if(res.ok){ adoptIdentityFromLogin(j.user); setToken(j.token); alert('registered'); } else alert(j.error||JSON.stringify(j));
+    if(!name||!password) return setAuthGateStatus('Enter a username and password.');
+    try{
+      const res = await fetch(apiBase() + '/api/register', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ name, password }) });
+      const j = await res.json();
+      if(res.ok){
+        adoptIdentityFromLogin(j.user);
+        setToken(j.token);
+        showToast('Registered', `Welcome, ${userName(currentUser)}.`);
+      } else {
+        setAuthGateStatus(j.error || 'Registration failed.');
+      }
+    }catch(e){
+      setAuthGateStatus('Could not reach that API base -- check the address and try again.');
+    }
   }
 
   async function login(){
     const name = authName.value.trim();
     const password = authPass.value;
-    if(!name||!password) return alert('enter name+password');
-    const res = await fetch(apiBase() + '/api/login', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ name, password }) });
-    const j = await res.json();
-    if(res.ok){ adoptIdentityFromLogin(j.user); setToken(j.token); showToast('Logged in', `Syncing as ${userName(currentUser)}.`); } else alert(j.error||JSON.stringify(j));
+    if(!name||!password) return setAuthGateStatus('Enter a username and password.');
+    try{
+      const res = await fetch(apiBase() + '/api/login', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ name, password }) });
+      const j = await res.json();
+      if(res.ok){
+        adoptIdentityFromLogin(j.user);
+        setToken(j.token);
+        showToast('Logged in', `Syncing as ${userName(currentUser)}.`);
+      } else {
+        setAuthGateStatus(j.error || 'Login failed.');
+      }
+    }catch(e){
+      setAuthGateStatus('Could not reach that API base -- check the address and try again.');
+    }
   }
-
-  let syncIntervalId = null;
 
   function setToken(t){
     authToken = t;
@@ -870,6 +896,8 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
       localStorage.setItem('accountability:api', apiBase());
       btnLogout.style.display='inline';
       setLoginStatus('Logged in');
+      setAuthGateStatus('');
+      if(authGate) authGate.classList.add('hidden');
       lockIdentityControls(true);
       runSync();
       if(syncIntervalId) clearInterval(syncIntervalId);
@@ -878,6 +906,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
       localStorage.removeItem('accountability:token');
       btnLogout.style.display='none';
       setLoginStatus('Logged out');
+      if(authGate) authGate.classList.remove('hidden');
       lockIdentityControls(false);
       if(syncIntervalId){ clearInterval(syncIntervalId); syncIntervalId = null; }
     }
