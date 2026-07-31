@@ -15,26 +15,87 @@
       <header>
         <div class="title-wrap">
           <h1>Good Cat</h1>
-          <p class="subtitle">Stay on track, celebrate streaks, and paw each other on.</p>
+          <p class="subtitle">Stay on track, lose lives wisely, and paw each other on.</p>
+          <div class="user-switch">You are: <select id="activeUserSelect"></select></div>
         </div>
-        <div class="users">
-          <label for="userSelect">Viewing:</label>
-          <select id="userSelect"></select>
-        </div>
-        <div class="auth">
-            <input id="apiBase" class="api-base" placeholder="API base (http://localhost:3000)" />
-            <input id="authName" placeholder="username" />
-            <input id="authPass" placeholder="password" type="password" />
-            <button id="btnRegister">Register</button>
-            <button id="btnLogin">Login</button>
-            <button id="btnLogout" style="display:none">Logout</button>
-            <button id="btnSync">Sync</button>
-            <button id="btnEnableNotify">Enable Notifications</button>
-            <span id="notifyStatus" class="small muted"></span>
-          </div>
+        <button id="settingsBtn" class="icon-button" aria-label="Open settings">⚙️</button>
         </header>
-      <main>
-        <section class="add">
+      <main class="user-columns">
+        <section class="user-panel">
+          <div class="panel-header">
+            <div>
+              <h2>Anna</h2>
+              <p class="lives-badge"><span id="lives-anna">9 / 9</span></p>
+            </div>
+            <span class="badge">Cat Crew</span>
+          </div>
+          <div class="council-banner hidden" id="council-anna">
+            <p>Our Lord is calling a family council</p>
+            <button id="ack-anna" type="button">Acknowledge</button>
+          </div>
+          <ul id="commitList-anna"></ul>
+        </section>
+        <section class="user-panel">
+          <div class="panel-header">
+            <div>
+              <h2>Jordan</h2>
+              <p class="lives-badge"><span id="lives-jordan">9 / 9</span></p>
+            </div>
+            <span class="badge">Cat Crew</span>
+          </div>
+          <div class="council-banner hidden" id="council-jordan">
+            <p>Our Lord is calling a family council</p>
+            <button id="ack-jordan" type="button">Acknowledge</button>
+          </div>
+          <ul id="commitList-jordan"></ul>
+        </section>
+      </main>
+
+      <button id="addButton" class="fab" aria-label="Add commitment">+</button>
+
+      <div id="settingsPanel" class="panel-modal hidden">
+        <div class="panel-content">
+          <button id="settingsClose" class="close-btn" aria-label="Close settings">✕</button>
+          <h2>Settings</h2>
+          <div class="settings-group">
+            <label for="apiBase">API base</label>
+            <input id="apiBase" placeholder="http://localhost:3000" />
+          </div>
+          <div class="settings-group">
+            <label for="authName">Username</label>
+            <input id="authName" placeholder="username" />
+            <label for="authPass">Password</label>
+            <input id="authPass" placeholder="password" type="password" />
+            <div class="settings-actions">
+              <button id="btnRegister" type="button">Register</button>
+              <button id="btnLogin" type="button">Login</button>
+            </div>
+            <div class="settings-actions">
+              <button id="btnLogout" type="button" style="display:none">Logout</button>
+              <button id="btnSync" type="button">Sync</button>
+            </div>
+          </div>
+          <div class="settings-group">
+            <button id="btnEnableNotify" type="button">Enable Notifications</button>
+            <button id="btnExportData" type="button">Export Backup</button>
+            <button id="btnShowState" type="button">Show Debug State</button>
+            <p id="notifyStatus" class="small muted"></p>
+          </div>
+          <p id="loginStatus" class="small muted"></p>
+        </div>
+      </div>
+
+      <div id="debugPanel" class="debug-panel hidden">
+        <div class="debug-header">
+          <div class="debug-title">Debug State</div>
+          <button id="btnCloseDebug" type="button">Close</button>
+        </div>
+        <textarea id="debugState" readonly></textarea>
+      </div>
+
+      <div id="addModal" class="panel-modal hidden">
+        <div class="panel-content">
+          <button id="addClose" class="close-btn" aria-label="Close add commitment">✕</button>
           <h2>Add Commitment</h2>
           <form id="addForm" class="form-grid">
             <input id="commitText" class="full-width" placeholder="e.g. Take medication" required />
@@ -66,13 +127,8 @@
             <label class="toggle-switch small"><input type="checkbox" id="commitEnabled" checked /><span class="toggle-slider"></span><span class="toggle-label">Enabled</span></label>
             <button type="submit" class="full-width">Add Commitment</button>
           </form>
-        </section>
-
-        <section class="list">
-          <div class="section-header"><h2>Commitments</h2><span class="badge">Cat Crew</span></div>
-          <ul id="commitList"></ul>
-        </section>
-      </main>
+        </div>
+      </div>
 
       <div id="historyModal" class="modal" style="display:none">
         <div class="modal-content">
@@ -94,6 +150,6 @@
         <small>Local demo — data stored in browser</small>
       </footer>
     </div>
-    <script src="app.js"></script>
+<script type="module" src="app.js"></script>
   </body>
 </html>

@@ -1,3 +1,6 @@
+import { localDateKey, todayLocalDate, parseLocalDate, normalizeDate, nextLocalDate, prevLocalDate, getDayKey, weekStartDate } from './date-utils.js';
+import { isScheduledDay, getScheduleDescription, countCompletionsThisWeek } from './schedule-utils.js';
+
 // Simple Accountability App (localStorage-backed)
 (function(){
   const DEFAULT_USERS = [
@@ -24,15 +27,17 @@
   // App state
   let state = load();
   let currentUser = state.users[0].id || 'anna';
+  let editingCommitId = null;
 
   // DOM refs
-  const userSelect = document.getElementById('userSelect');
   const commitFor = document.getElementById('commitFor');
+  const activeUserSelect = document.getElementById('activeUserSelect');
   const addForm = document.getElementById('addForm');
   const commitText = document.getElementById('commitText');
   const commitEnabled = document.getElementById('commitEnabled');
   const commitSchedule = document.getElementById('commitSchedule');
-  const commitList = document.getElementById('commitList');
+  const commitListAnna = document.getElementById('commitList-anna');
+  const commitListJordan = document.getElementById('commitList-jordan');
   const commitLabel = document.getElementById('commitLabel');
   const commitTarget = document.getElementById('commitTarget');
   const commitReminderEnabled = document.getElementById('commitReminderEnabled');
@@ -45,13 +50,34 @@
   const btnLogin = document.getElementById('btnLogin');
   const btnLogout = document.getElementById('btnLogout');
   const btnSync = document.getElementById('btnSync');
+  const btnEnableNotify = document.getElementById('btnEnableNotify');
+  const btnExportData = document.getElementById('btnExportData');
+  const notifyStatus = document.getElementById('notifyStatus');
+  const livesAnna = document.getElementById('lives-anna');
+  const livesJordan = document.getElementById('lives-jordan');
+  const councilAnna = document.getElementById('council-anna');
+  const councilJordan = document.getElementById('council-jordan');
+  const ackAnna = document.getElementById('ack-anna');
+  const ackJordan = document.getElementById('ack-jordan');
+  const settingsBtn = document.getElementById('settingsBtn');
+  const settingsPanel = document.getElementById('settingsPanel');
+  const settingsClose = document.getElementById('settingsClose');
+  const debugPanel = document.getElementById('debugPanel');
+  const btnShowState = document.getElementById('btnShowState');
+  const debugState = document.getElementById('debugState');
+  const addButton = document.getElementById('addButton');
+  const addModal = document.getElementById('addModal');
+  const addClose = document.getElementById('addClose');
+  const loginStatus = document.getElementById('loginStatus');
+  const START_LIVES = 9;
+  const MAX_LIVES = 9;
+  const RESET_LIVES_AFTER_COUNCIL = 3;
 
   let authToken = localStorage.getItem('accountability:token') || null;
   if(authToken) apiBaseInput.value = localStorage.getItem('accountability:api') || 'http://localhost:3000';
+  setLoginStatus(authToken ? 'Logged in' : 'Logged out');
 
   // Notification controls
-  const btnEnableNotify = document.getElementById('btnEnableNotify');
-  const notifyStatus = document.getElementById('notifyStatus');
   let notifyTimers = new Map();
   function updateNotifyStatus(){ notifyStatus.textContent = 'Permission: ' + (typeof Notification !== 'undefined' ? Notification.permission : 'unsupported'); }
   updateNotifyStatus();
@@ -95,6 +121,18 @@
     setTimeout(()=>{ t.style.opacity='0'; setTimeout(()=>t.remove(),400); },7000);
   }
 
+  function localDateKey(date){
+    const d = date instanceof Date ? date : new Date(date);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  function todayLocalDate(){
+    return localDateKey(new Date());
+  }
+
   function showSystemNotification(title, body){
     if(typeof Notification === 'undefined') return showToast(title, body);
     if(Notification.permission === 'granted'){
@@ -102,30 +140,196 @@
     } else showToast(title, body);
   }
 
-  function scheduleReminderFor(commit){
-    // clear existing
-    if(!commit || !commit.for) return;
-    const key = commit.id;
-    if(notifyTimers.has(key)){ clearTimeout(notifyTimers.get(key)); notifyTimers.delete(key); }
-    if(!commit.reminderEnabled) return;
-    // parse time
-    const t = commit.reminderTime || commit.reminder || commit.reminderTime || null;
-    const timeStr = commit.reminderTime || commit.reminder || commit.commitReminderTime || null;
-    if(!timeStr) return;
-    const [hh,mm] = (timeStr||'00:00').split(':').map(Number);
-    const now = new Date();
-    const next = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh, mm, 0, 0);
-    if(next <= now) next.setDate(next.getDate() + 1);
-    const delay = next.getTime() - now.getTime();
-    const id = setTimeout(function tick(){
-      showSystemNotification('Reminder: ' + commit.text, 'Time for: ' + commit.text);
-      // reschedule next day
-      const n = new Date(); n.setDate(n.getDate()+1); n.setHours(hh,mm,0,0);
-      const d = n.getTime() - Date.now();
-      const tid = setTimeout(tick, d);
-      notifyTimers.set(key, tid);
-    }, delay);
-    notifyTimers.set(key, id);
+  function normalizeDate(date){
+    if(!date) return null;
+    return localDateKey(date);
+  }
+
+  function parseLocalDate(date){
+    if(!date) return null;
+    if(date instanceof Date) return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    const parts = String(date).split('-').map(Number);
+    if(parts.length === 3){
+      return new Date(parts[0], parts[1] - 1, parts[2]);
+    }
+    return new Date(date);
+  }
+
+  function nextLocalDate(date){
+    const d = parseLocalDate(date);
+    if(!d) return null;
+    d.setDate(d.getDate() + 1);
+    return localDateKey(d);
+  }
+
+  function prevLocalDate(date){
+    const d = parseLocalDate(date);
+    if(!d) return null;
+    d.setDate(d.getDate() - 1);
+    return localDateKey(d);
+  }
+
+  function userName(id){
+    const user = state.users.find(u => u.id === id);
+    return user ? user.name : id;
+  }
+
+  function getCommitCreatedDate(commit){
+    return commit.createdAt ? commit.createdAt : todayLocalDate();
+  }
+
+  // Reuse schedule helpers from schedule-utils.js
+
+  function rebuildStreak(commit){
+    if(!commit || !commit.history) return 0;
+    const today = localDateKey(new Date());
+    let streak = 0;
+    let cursor = new Date();
+    cursor.setHours(0,0,0,0);
+    while(true){
+      const cursorIso = localDateKey(cursor);
+      if(!isScheduledDay(commit, cursorIso)){
+        cursor.setDate(cursor.getDate() - 1);
+        continue;
+      }
+      if(commit.history.includes(cursorIso)){
+        streak += 1;
+        cursor.setDate(cursor.getDate() - 1);
+      } else {
+        break;
+      }
+    }
+    return streak;
+  }
+
+  function updateCommitStatusFromHistory(commit){
+    if(!commit) return;
+    commit.history = commit.history || [];
+    commit.streak = rebuildStreak(commit);
+    commit.doneToday = commit.history.includes(todayLocalDate());
+    if(commit.target && commit.streak >= commit.target){
+      commit.achieved = true;
+      commit.achievedAt = commit.achievedAt || todayLocalDate();
+    } else if(commit.target && commit.streak < commit.target){
+      commit.achieved = false;
+    }
+  }
+
+  function ensureLifeState(){
+    if(!state.lives) state.lives = { anna: START_LIVES, jordan: START_LIVES };
+    state.lives.anna = Math.min(MAX_LIVES, Math.max(0, state.lives.anna));
+    state.lives.jordan = Math.min(MAX_LIVES, Math.max(0, state.lives.jordan));
+    if(!state.lifeLastEvaluatedDate) state.lifeLastEvaluatedDate = { anna: null, jordan: null };
+    if(!state.lifeGains) state.lifeGains = { anna: {}, jordan: {} };
+    if(!state.lifeLosses) state.lifeLosses = { anna: {}, jordan: {} };
+    if(!state.lifeCouncilAck) state.lifeCouncilAck = { anna: false, jordan: false };
+  }
+
+  function getUserScheduledCountsForDate(userId, date){
+    const commits = state.commitments.filter(c => c.for === userId && c.enabled);
+    const isoDate = localDateKey(date);
+    let scheduled = 0;
+    let done = 0;
+    for(const commit of commits){
+      const created = getCommitCreatedDate(commit);
+      if(created > isoDate) continue;
+      if(isScheduledDay(commit, isoDate)){
+        scheduled += 1;
+        if(Array.isArray(commit.history) && commit.history.includes(isoDate)) done += 1;
+      }
+    }
+    return { scheduled, done };
+  }
+
+  function getWindowDates(endDate, windowSize = 7){
+    const dates = [];
+    let cursor = parseLocalDate(endDate);
+    if(!cursor) return dates;
+    for(let i = 0; i < windowSize; i += 1){
+      dates.unshift(localDateKey(cursor));
+      cursor.setDate(cursor.getDate() - 1);
+    }
+    return dates;
+  }
+
+  function updateLivesForUser(userId){
+    ensureLifeState();
+    const today = todayLocalDate();
+    const yesterday = prevLocalDate(today);
+    let startDate = state.lifeLastEvaluatedDate[userId] ? nextLocalDate(state.lifeLastEvaluatedDate[userId]) : null;
+    if(!startDate){
+      const createdDates = state.commitments.filter(c=>c.for===userId).map(getCommitCreatedDate).filter(Boolean);
+      const historyDates = state.commitments.filter(c=>c.for===userId && Array.isArray(c.history)).flatMap(c=>c.history);
+      const allDates = [...createdDates, ...historyDates];
+      startDate = allDates.length ? allDates.reduce((a,b)=> a < b ? a : b) : today;
+    }
+    if(!startDate) startDate = today;
+    let cursor = parseLocalDate(startDate);
+    const end = parseLocalDate(yesterday);
+    if(!cursor || !end || cursor > end) return;
+    while(cursor <= end){
+      const dayKey = localDateKey(cursor);
+      const counts = getUserScheduledCountsForDate(userId, dayKey);
+      if(counts.scheduled > 0 && counts.done < counts.scheduled){
+        if(!state.lifeLosses[userId][dayKey]){
+          state.lifeLosses[userId][dayKey] = true;
+          state.lives[userId] = Math.max(0, state.lives[userId] - 1);
+          if(dayKey === yesterday || dayKey === today) showToast('Bots is judging you', `${userName(userId)} missed a scheduled habit.`);
+        }
+      }
+      const window = getWindowDates(dayKey, 7);
+      if(window.length === 7){
+        const totals = window.reduce((acc, date) => {
+          const counts = getUserScheduledCountsForDate(userId, date);
+          acc.scheduled += counts.scheduled;
+          acc.done += counts.done;
+          return acc;
+        }, { scheduled:0, done:0 });
+        if(totals.scheduled > 0){
+          const ratio = totals.done / totals.scheduled;
+          let gain = 0;
+          if(ratio >= 1) gain = 2;
+          else if(ratio >= 0.9) gain = 1;
+          if(gain > 0 && !state.lifeGains[userId][dayKey]){
+            state.lifeGains[userId][dayKey] = gain;
+            state.lives[userId] = Math.min(MAX_LIVES, state.lives[userId] + gain);
+            if(dayKey === yesterday || dayKey === today){
+              showToast('Loki is pleased with ' + userName(userId), `Great job keeping up with scheduled habits.`);
+            }
+          }
+        }
+      }
+      state.lifeLastEvaluatedDate[userId] = dayKey;
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    save(state);
+  }
+
+  function processCouncilAcknowledgement(userId){
+    state.lifeCouncilAck[userId] = true;
+    if(state.lifeCouncilAck.anna && state.lifeCouncilAck.jordan){
+      state.lives.anna = RESET_LIVES_AFTER_COUNCIL;
+      state.lives.jordan = RESET_LIVES_AFTER_COUNCIL;
+      state.lifeCouncilAck.anna = false;
+      state.lifeCouncilAck.jordan = false;
+      showToast('Family council complete', 'Lives have been reset to 3 for both people.');
+    }
+    save(state);
+    renderLives();
+  }
+
+  function renderLives(){
+    ensureLifeState();
+    if(livesAnna) livesAnna.textContent = `${state.lives.anna} / ${MAX_LIVES}`;
+    if(livesJordan) livesJordan.textContent = `${state.lives.jordan} / ${MAX_LIVES}`;
+    if(councilAnna) councilAnna.classList.toggle('hidden', !(state.lives.anna <= 0));
+    if(councilJordan) councilJordan.classList.toggle('hidden', !(state.lives.jordan <= 0));
+  }
+
+  function maybeResetCouncil(){
+    if(state.lifeCouncilAck.anna && state.lifeCouncilAck.jordan){
+      processCouncilAcknowledgement('anna');
+    }
   }
 
   // Weekly scheduling helpers for N-times-per-week commitments
@@ -138,36 +342,24 @@
     return date;
   }
 
-  function countCompletionsThisWeek(commit, refDate){
-    if(!commit || !commit.history) return 0;
-    const start = weekStartDate(refDate).toISOString().slice(0,10);
-    const end = new Date(weekStartDate(refDate)); end.setDate(end.getDate()+7);
-    const endStr = end.toISOString().slice(0,10);
-    return (commit.history||[]).filter(d => d >= start && d < endStr).length;
-  }
-
   function findNextReminderDateForWeekly(commit, nowDate){
     const weeklyTarget = commit.weeklyTarget || null;
     if(!weeklyTarget) return null;
     const start = weekStartDate(nowDate);
     const completed = countCompletionsThisWeek(commit, nowDate);
     const remaining = Math.max(0, weeklyTarget - completed);
-    // if already satisfied this week, schedule for next week's start
     if(remaining === 0){ const next = new Date(start); next.setDate(start.getDate()+7); return next; }
-    // pick earliest day from today..endOfWeek
-    const todayStr = nowDate.toISOString().slice(0,10);
+    const todayStr = localDateKey(nowDate);
     for(let i=0;i<7;i++){
       const day = new Date(start); day.setDate(start.getDate()+i);
-      const dstr = day.toISOString().slice(0,10);
+      const dstr = localDateKey(day);
       if(dstr < todayStr) continue;
       return day;
     }
-    // fallback to next week start
     const next = new Date(start); next.setDate(start.getDate()+7); return next;
   }
 
   function scheduleReminderFor(commit){
-    // enhanced scheduler that supports weekly N-times targets
     if(!commit || !commit.for) return;
     const key = commit.id;
     if(notifyTimers.has(key)){ clearTimeout(notifyTimers.get(key)); notifyTimers.delete(key); }
@@ -176,53 +368,44 @@
     if(!timeStr) return;
     const [hh,mm] = timeStr.split(':').map(Number);
     const now = new Date();
-    let nextDate = null;
-    if(commit.weeklyTarget){
-      // choose next date that helps satisfy weekly target
-      nextDate = findNextReminderDateForWeekly(commit, now);
-    } else {
-      // default: next occurrence (today if later else tomorrow)
-      nextDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh, mm, 0, 0);
-      if(nextDate <= now) nextDate.setDate(nextDate.getDate()+1);
-    }
-    if(!nextDate) return;
-    // set to the configured time
-    nextDate.setHours(hh, mm, 0, 0);
+    let nextDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh, mm, 0, 0);
+    if(nextDate <= now) nextDate.setDate(nextDate.getDate()+1);
     const delay = nextDate.getTime() - now.getTime();
     const id = setTimeout(function tick(){
       showSystemNotification('Reminder: ' + commit.text, 'Time for: ' + commit.text);
-      // after firing, reschedule based on same rules
       scheduleReminderFor(commit);
     }, Math.max(0, delay));
     notifyTimers.set(key, id);
   }
 
   function scheduleAllReminders(){
-    for(const c of state.commitments.filter(x=>x.for===currentUser)) scheduleReminderFor(c);
+    for(const c of state.commitments) scheduleReminderFor(c);
   }
 
 
   function renderUsers(){
-    userSelect.innerHTML = '';
     commitFor.innerHTML = '';
+    if(activeUserSelect) activeUserSelect.innerHTML = '';
     state.users.forEach(u => {
       const opt = document.createElement('option'); opt.value = u.id; opt.textContent = u.name;
-      userSelect.appendChild(opt);
-      const opt2 = opt.cloneNode(true);
-      commitFor.appendChild(opt2);
+      commitFor.appendChild(opt);
+      if(activeUserSelect){ const opt2 = opt.cloneNode(true); activeUserSelect.appendChild(opt2); }
     });
-    userSelect.value = currentUser;
+    if(!state.users.find(u => u.id === currentUser)) currentUser = state.users[0]?.id || 'anna';
+    commitFor.value = currentUser;
+    if(activeUserSelect) activeUserSelect.value = currentUser;
   }
 
-  function renderList(){
-    commitList.innerHTML = '';
-    const visible = state.commitments.filter(c => c.for === currentUser);
+  function renderCommitmentsForUser(userId, targetList){
+    targetList.innerHTML = '';
+    const visible = state.commitments.filter(c => c.for === userId);
     if(visible.length === 0){
-      commitList.innerHTML = '<li class="small muted">No commitments yet for this user.</li>';
+      targetList.innerHTML = '<li class="small muted">No commitments yet. Tap + to add a commitment and keep your streak alive.</li>';
       return;
     }
     visible.forEach(c => {
       c.history = c.history || [];
+      updateCommitStatusFromHistory(c);
       const li = document.createElement('li');
       const meta = document.createElement('div'); meta.className='card-main';
       const titleRow = document.createElement('div'); titleRow.className='card-title';
@@ -231,12 +414,7 @@
       const textWrapper = document.createElement('div'); textWrapper.className='card-text';
       const labelHtml = c.label ? `<span class="label-badge">${escapeHtml(c.label)}</span> ` : '';
       const achievedHtml = c.achieved ? `<span class="achieved-badge">Achieved</span> ` : '';
-      let sched = 'Daily';
-      if(c.schedule === 'weekdays') sched = 'Weekdays (Mon–Fri)';
-      else if(c.schedule === 'twice') sched = 'Twice a week';
-      else if(c.schedule === 'three') sched = 'Three times a week';
-      else if(c.schedule === 'four') sched = 'Four times a week';
-      else if(c.schedule === 'custom' && Array.isArray(c.scheduleDays)) sched = `Custom: ${c.scheduleDays.join(', ')}`;
+      const sched = getScheduleDescription(c);
       const targetHtml = c.target ? ` · Streak: ${c.streak||0} / ${c.target}` : ` · Streak: ${c.streak||0}`;
       textWrapper.innerHTML = `${labelHtml}${achievedHtml}<strong>${escapeHtml(c.text)}</strong><div class="card-meta">${c.enabled ? 'Enabled' : 'Disabled'} · ${sched}${targetHtml}</div>`;
       titleRow.appendChild(icon);
@@ -265,28 +443,29 @@
       const doneCheckbox = done.querySelector('input');
       doneCheckbox.title = 'Mark done for today';
       doneCheckbox.addEventListener('change', ()=>{
-        // update streak/lastDone locally
-        const today = new Date().toISOString().slice(0,10);
-        const yesterday = new Date(Date.now() - 24*60*60*1000).toISOString().slice(0,10);
+        const today = normalizeDate(new Date());
+        c.history = c.history || [];
         if(doneCheckbox.checked){
-          if(c.lastDone === yesterday) c.streak = (c.streak||0) + 1; else c.streak = 1;
-          c.lastDone = today;
+          if(!c.history.includes(today)) c.history.push(today);
           c.doneToday = true;
+          showToast('Loki is pleased with ' + userName(c.for), `${c.text} was completed.`);
         } else {
           c.doneToday = false;
+          const idx = c.history.indexOf(today);
+          if(idx >= 0) c.history.splice(idx, 1);
         }
-        // maintain local history
-        c.history = c.history || [];
-        if(doneCheckbox.checked){ if(!c.history.includes(today)) c.history.push(today);
-          // check target locally and mark achieved
-          if(c.target && c.streak >= c.target && !c.achieved){ c.achieved = true; c.achievedAt = today; }
+        updateCommitStatusFromHistory(c);
+        if(c.target && c.streak >= c.target){
+          c.achieved = true;
+          c.achievedAt = c.achievedAt || today;
+        } else if(c.target && c.streak < c.target){
+          c.achieved = false;
         }
-        else { const idx = c.history.indexOf(today); if(idx>=0) c.history.splice(idx,1); }
+        if(c.doneToday) c.lastDone = today;
         save(state);
+        updateLivesForUser(c.for);
         renderList();
-        // reschedule reminders after status change
         scheduleReminderFor(c);
-        // update remote if available
         if(authToken && c.remoteId){
           fetch(apiBase() + '/api/commitments/' + c.remoteId, { method: 'PUT', headers: { 'content-type':'application/json', 'authorization':'Bearer '+authToken }, body: JSON.stringify({ text: c.text, enabled: c.enabled, doneToday: c.doneToday, schedule: c.schedule, label: c.label, target: c.target, achieved: c.achieved, achievedAt: c.achievedAt }) }).then(r=>r.json()).then(j=>{
             if(j && j.streak!==undefined) { c.streak = j.streak; c.lastDone = j.lastDone; c.achieved = j.achieved||c.achieved; c.achievedAt = j.achievedAt||c.achievedAt; save(state); renderList(); }
@@ -294,25 +473,10 @@
         }
       });
 
-      const enabled = document.createElement('label');
-      enabled.className = 'toggle-switch';
-      enabled.innerHTML = `<input type="checkbox" ${c.enabled? 'checked':''}/><span class="toggle-slider"></span><span class="toggle-label">Enabled</span>`;
-      const enabledCheckbox = enabled.querySelector('input');
-      enabledCheckbox.title = 'Enabled for this user';
-      enabledCheckbox.addEventListener('change', ()=>{
-        c.enabled = enabledCheckbox.checked;
-        save(state);
-        renderList();
-      });
-
-      const commentPreview = document.createElement('div');
-      commentPreview.className = 'comment-preview';
-      commentPreview.textContent = c.comments && c.comments.length ? `Latest meow: ${c.comments[c.comments.length-1]}` : 'No meows yet.';
-      meta.appendChild(commentPreview);
-
       const pawsBtn = document.createElement('button');
-      pawsBtn.className = 'paw-button';
-      pawsBtn.textContent = `🐾 Paw ${c.paws ? `(${c.paws})` : ''}`;
+      pawsBtn.className = 'paw-button small-action';
+      pawsBtn.textContent = `🐾 ${c.paws || 0}`;
+      pawsBtn.title = 'Send a paw';
       pawsBtn.addEventListener('click', ()=>{
         c.paws = (c.paws || 0) + 1;
         save(state);
@@ -320,55 +484,71 @@
         showToast('Paw sent!', `You cheered on “${c.text}”.`);
       });
 
-      const commentBtn = document.createElement('button');
-      commentBtn.textContent = 'Leave a Meow';
-      commentBtn.addEventListener('click', ()=>{
-        const message = prompt('Send a cat encouragement note:', 'Keep going, fur friend!');
-        if(!message) return;
-        c.comments = c.comments || [];
-        c.comments.push(message.trim());
-        save(state);
-        renderList();
-        showToast('Meow added!', 'Your encouragement is now part of this commitment.');
-      });
-
-      const histBtn = document.createElement('button'); histBtn.textContent='History';
+      const histBtn = document.createElement('button'); histBtn.className='small-action'; histBtn.textContent='History';
       histBtn.addEventListener('click', ()=>{ showHistory(c); });
 
-      const remindToggle = document.createElement('label');
-      remindToggle.className = 'toggle-switch';
-      remindToggle.innerHTML = `<input type="checkbox" ${c.reminderEnabled? 'checked':''}/><span class="toggle-slider"></span><span class="toggle-label">Reminder</span>`;
-      const remindCheckbox = remindToggle.querySelector('input');
-      remindCheckbox.addEventListener('change', ()=>{ c.reminderEnabled = remindCheckbox.checked; save(state); if(c.reminderEnabled) scheduleReminderFor(c); else { if(notifyTimers.has(c.id)){ clearTimeout(notifyTimers.get(c.id)); notifyTimers.delete(c.id); } } renderList(); });
+      const editBtn = document.createElement('button'); editBtn.className='small-action'; editBtn.textContent = 'Edit';
+      editBtn.addEventListener('click', ()=> openEditCommit(c));
 
-      const remindTimeInput = document.createElement('input'); remindTimeInput.type='time'; remindTimeInput.value = c.reminderTime || '';
-      remindTimeInput.addEventListener('change', ()=>{ c.reminderTime = remindTimeInput.value; save(state); if(c.reminderEnabled) scheduleReminderFor(c); });
-
-      const del = document.createElement('button'); del.textContent='Delete';
+      const del = document.createElement('button'); del.className='small-action danger'; del.textContent='Delete';
       del.addEventListener('click', ()=>{
+        if(!confirm(`Delete “${c.text}”? This cannot be undone.`)) return;
         state.commitments = state.commitments.filter(x=>x.id!==c.id);
         save(state);
         renderList();
       });
 
       controls.appendChild(done);
-      controls.appendChild(enabled);
       controls.appendChild(pawsBtn);
-      controls.appendChild(commentBtn);
-      controls.appendChild(remindToggle);
-      controls.appendChild(remindTimeInput);
       controls.appendChild(histBtn);
+      controls.appendChild(editBtn);
       controls.appendChild(del);
+
+      if(c.comments && c.comments.length){
+        const commentPreview = document.createElement('div');
+        commentPreview.className = 'comment-preview';
+        commentPreview.textContent = `Latest meow: ${c.comments[c.comments.length-1]}`;
+        meta.appendChild(commentPreview);
+      }
 
       li.appendChild(meta);
       li.appendChild(controls);
-      commitList.appendChild(li);
+      li.addEventListener('click', (event)=>{
+        if(event.target.closest('.card-actions')) return;
+        openEditCommit(c);
+      });
+      targetList.appendChild(li);
     });
+  }
+
+  function renderList(){
+    updateLivesForUser('anna');
+    updateLivesForUser('jordan');
+    renderCommitmentsForUser('anna', commitListAnna);
+    renderCommitmentsForUser('jordan', commitListJordan);
+    renderLives();
   }
 
   // Remote sync helpers
   function apiBase(){
     return apiBaseInput.value || 'http://localhost:3000';
+  }
+
+  function setLoginStatus(text){
+    if(loginStatus) loginStatus.textContent = text || '';
+  }
+
+  function exportBackup(){
+    const data = JSON.stringify(state, null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `good-cat-backup-${todayLocalDate()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   }
 
   async function register(){
@@ -390,24 +570,80 @@
   }
 
   function setToken(t){
-    authToken = t; if(t){ localStorage.setItem('accountability:token', t); localStorage.setItem('accountability:api', apiBase()); btnLogout.style.display='inline'; } else { localStorage.removeItem('accountability:token'); btnLogout.style.display='none'; }
+    authToken = t;
+    if(t){
+      localStorage.setItem('accountability:token', t);
+      localStorage.setItem('accountability:api', apiBase());
+      btnLogout.style.display='inline';
+      setLoginStatus('Logged in');
+    } else {
+      localStorage.removeItem('accountability:token');
+      btnLogout.style.display='none';
+      setLoginStatus('Logged out');
+    }
+  }
+
+  ackAnna.addEventListener('click', ()=> processCouncilAcknowledgement('anna'));
+  ackJordan.addEventListener('click', ()=> processCouncilAcknowledgement('jordan'));
+
+  function openEditCommit(commit){
+    editingCommitId = commit.id;
+    commitText.value = commit.text;
+    commitFor.value = commit.for;
+    commitSchedule.value = commit.schedule || 'daily';
+    if(commit.schedule === 'custom' && Array.isArray(commit.scheduleDays)){
+      customDays.style.display = 'block';
+      document.querySelectorAll('#customDays input[name="commitDay"]').forEach(input => {
+        input.checked = commit.scheduleDays.includes(input.value);
+      });
+    } else {
+      customDays.style.display = commit.schedule === 'custom' ? 'block' : 'none';
+      document.querySelectorAll('#customDays input[name="commitDay"]').forEach(input => input.checked = false);
+    }
+    commitLabel.value = commit.label || '';
+    commitTarget.value = commit.target || '';
+    commitReminderEnabled.checked = !!commit.reminderEnabled;
+    commitReminderTime.value = commit.reminderTime || '';
+    commitEnabled.checked = !!commit.enabled;
+    const modalTitle = addModal.querySelector('h2');
+    const submitBtn = addForm.querySelector('button[type="submit"]');
+    if(modalTitle) modalTitle.textContent = 'Edit Commitment';
+    if(submitBtn) submitBtn.textContent = 'Save Commitment';
+    addModal.classList.remove('hidden');
   }
 
   btnRegister.addEventListener('click', register);
   btnLogin.addEventListener('click', login);
-  btnLogout.addEventListener('click', ()=>{ setToken(null); alert('logged out'); });
+  btnLogout.addEventListener('click', ()=>{ setToken(null); setLoginStatus('Logged out'); alert('logged out'); });
+  btnExportData.addEventListener('click', exportBackup);
 
   // Push local commitments to remote for current logged-in user (create/replace)
   async function syncPush(){
     if(!authToken) return alert('login first');
-    // push local commitments for currentUser
     const toPush = state.commitments.filter(c=>c.for===currentUser);
     for(const c of toPush){
-      // create remote commitment
+      const payload = {
+        text: c.text,
+        enabled: c.enabled,
+        schedule: c.schedule,
+        scheduleDays: c.scheduleDays || null,
+        reminderEnabled: c.reminderEnabled || false,
+        reminderTime: c.reminderTime || null,
+        weeklyTarget: c.weeklyTarget || null,
+        label: c.label || null,
+        target: c.target || null,
+        achieved: c.achieved || false,
+        achievedAt: c.achievedAt || null
+      };
       try{
-        const res = await fetch(apiBase() + '/api/commitments', { method: 'POST', headers: { 'content-type':'application/json', 'authorization': 'Bearer '+authToken }, body: JSON.stringify({ text: c.text, enabled: c.enabled, schedule: c.schedule, label: c.label, target: c.target, achieved: c.achieved, achievedAt: c.achievedAt }) });
-        if(res.ok){ const j = await res.json(); c.remoteId = j.id; c.streak = j.streak||0; c.lastDone = j.lastDone||null; c.achieved = j.achieved||c.achieved; c.achievedAt = j.achievedAt||c.achievedAt; save(state); }
-      }catch(e){ /* ignore per-item errors */ }
+        let res;
+        if(c.remoteId){
+          res = await fetch(apiBase() + '/api/commitments/' + c.remoteId, { method: 'PUT', headers: { 'content-type':'application/json', 'authorization': 'Bearer '+authToken }, body: JSON.stringify(payload) });
+        } else {
+          res = await fetch(apiBase() + '/api/commitments', { method: 'POST', headers: { 'content-type':'application/json', 'authorization': 'Bearer '+authToken }, body: JSON.stringify(payload) });
+        }
+        if(res.ok){ const j = await res.json(); c.remoteId = j.id || c.remoteId; c.streak = j.streak||c.streak||0; c.lastDone = j.lastDone||c.lastDone||null; c.achieved = j.achieved||c.achieved; c.achievedAt = j.achievedAt||c.achievedAt||null; save(state); }
+      }catch(e){ console.error('syncPush item failed', e); }
     }
     alert('push complete');
   }
@@ -419,8 +655,33 @@
     const list = await res.json();
     // replace local commitments for currentUser with pulled ones
     state.commitments = state.commitments.filter(c=>c.for!==currentUser);
-    for(const r of list){ state.commitments.push({ id: 'r'+r.id, text: r.text, for: currentUser, enabled: !!r.enabled, doneToday: !!r.doneToday, schedule: r.schedule||'daily', streak: r.streak||0, lastDone: r.lastDone||null, remoteId: r.id }); }
-    for(const r of list){ state.commitments.push({ id: 'r'+r.id, text: r.text, for: currentUser, enabled: !!r.enabled, doneToday: !!r.doneToday, schedule: r.schedule||'daily', streak: r.streak||0, lastDone: r.lastDone||null, remoteId: r.id, label: r.label||null, target: r.target||null, achieved: !!r.achieved, achievedAt: r.achievedAt||null, history: [] }); }
+    for(const r of list){
+      let scheduleDays = null;
+      if(r.scheduleDays){
+        try{ scheduleDays = Array.isArray(r.scheduleDays) ? r.scheduleDays : JSON.parse(r.scheduleDays); } catch(e){ scheduleDays = null; }
+      }
+        state.commitments.push({
+        id: 'r'+r.id,
+        text: r.text,
+        for: currentUser,
+        enabled: !!r.enabled,
+        doneToday: !!r.doneToday,
+        schedule: r.schedule||'daily',
+        scheduleDays,
+        streak: r.streak||0,
+        lastDone: r.lastDone||null,
+        remoteId: r.id,
+        label: r.label||null,
+        target: r.target||null,
+        achieved: !!r.achieved,
+        achievedAt: r.achievedAt||null,
+        history: [],
+        reminderEnabled: !!r.reminderEnabled,
+        reminderTime: r.reminderTime||null,
+        weeklyTarget: r.weeklyTarget||null,
+        createdAt: r.createdAt || todayLocalDate()
+      });
+    }
     save(state);
     renderList();
     alert('pull complete');
@@ -430,6 +691,68 @@
     const ok = confirm('Sync: push local -> remote? (OK) Pull remote -> local? (Cancel)');
     if(ok) await syncPush(); else await syncPull();
   });
+
+  settingsBtn.addEventListener('click', ()=> settingsPanel.classList.remove('hidden'));
+  settingsClose.addEventListener('click', ()=> settingsPanel.classList.add('hidden'));
+  settingsPanel.addEventListener('click', e => { if(e.target === settingsPanel) settingsPanel.classList.add('hidden'); });
+
+  if(activeUserSelect){
+    activeUserSelect.addEventListener('change', ()=>{
+      currentUser = activeUserSelect.value;
+      commitFor.value = currentUser;
+      renderList();
+    });
+  }
+
+  function toggleDebugPanel(show){
+    if(!debugPanel) return;
+    const visible = show === undefined ? debugPanel.classList.contains('hidden') : !show;
+    debugPanel.classList.toggle('hidden', !visible);
+    if(visible){
+      debugState.textContent = JSON.stringify(state, null, 2);
+    }
+  }
+
+  document.addEventListener('keydown', e => {
+    if(e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'd'){
+      e.preventDefault();
+      toggleDebugPanel();
+    }
+  });
+
+  if(btnShowState){
+    btnShowState.addEventListener('click', ()=>{
+      toggleDebugPanel(true);
+    });
+  }
+
+  const btnCloseDebug = document.getElementById('btnCloseDebug');
+  if(btnCloseDebug){
+    btnCloseDebug.addEventListener('click', ()=> toggleDebugPanel(false));
+  }
+
+  function clearAddForm(){
+    editingCommitId = null;
+    commitText.value = '';
+    if(commitFor) commitFor.value = currentUser;
+    if(activeUserSelect) activeUserSelect.value = currentUser;
+    commitSchedule.value = 'daily';
+    customDays.style.display = 'none';
+    document.querySelectorAll('#customDays input[name="commitDay"]').forEach(input=>input.checked=false);
+    commitLabel.value = '';
+    commitTarget.value = '';
+    commitReminderEnabled.checked = false;
+    commitReminderTime.value = '';
+    commitEnabled.checked = true;
+    const modalTitle = addModal.querySelector('h2');
+    const submitBtn = addForm.querySelector('button[type="submit"]');
+    if(modalTitle) modalTitle.textContent = 'Add Commitment';
+    if(submitBtn) submitBtn.textContent = 'Add Commitment';
+  }
+
+  addButton.addEventListener('click', ()=>{ clearAddForm(); addModal.classList.remove('hidden'); });
+  addClose.addEventListener('click', ()=>{ addModal.classList.add('hidden'); clearAddForm(); });
+  addModal.addEventListener('click', e => { if(e.target === addModal){ addModal.classList.add('hidden'); clearAddForm(); } });
 
   // show logout button if token exists
   if(authToken) btnLogout.style.display='inline';
@@ -443,9 +766,10 @@
 
   function getLastNDates(n){
     const out = [];
+    const today = new Date();
     for(let i = n-1;i>=0;i--){
-      const d = new Date(Date.now() - i*24*60*60*1000).toISOString().slice(0,10);
-      out.push(d);
+      const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - i);
+      out.push(localDateKey(d));
     }
     return out;
   }
@@ -504,11 +828,6 @@
   }
 
   // Handlers
-  userSelect.addEventListener('change', (e)=>{
-    currentUser = e.target.value;
-    renderList();
-  });
-
   addForm.addEventListener('submit', (e)=>{
     e.preventDefault();
     const text = commitText.value.trim();
@@ -526,17 +845,40 @@
     const reminderEnabled = commitReminderEnabled ? !!commitReminderEnabled.checked : false;
     const reminderTime = commitReminderTime ? (commitReminderTime.value || null) : null;
     const weeklyTarget = schedule === 'twice' ? 2 : (schedule === 'three' ? 3 : (schedule === 'four' ? 4 : null));
-    const newCommit = { id: uid(), text, for: forUser, enabled, doneToday:false, schedule, scheduleDays, streak:0, lastDone:null, remoteId:null, history: [], label, target, reminderEnabled, reminderTime, paws:0, comments: [], weeklyTarget };
-    state.commitments.push(newCommit);
+
+    let commitItem;
+    if(editingCommitId){
+      commitItem = state.commitments.find(c=>c.id===editingCommitId);
+      if(commitItem){
+        commitItem.text = text;
+        commitItem.for = forUser;
+        commitItem.enabled = enabled;
+        commitItem.schedule = schedule;
+        commitItem.scheduleDays = scheduleDays;
+        commitItem.label = label;
+        commitItem.target = target;
+        commitItem.reminderEnabled = reminderEnabled;
+        commitItem.reminderTime = reminderTime;
+        commitItem.weeklyTarget = weeklyTarget;
+        updateCommitStatusFromHistory(commitItem);
+        scheduleReminderFor(commitItem);
+      }
+    } else {
+      commitItem = { id: uid(), text, for: forUser, enabled, doneToday:false, schedule, scheduleDays, streak:0, lastDone:null, remoteId:null, history: [], label, target, reminderEnabled, reminderTime, paws:0, comments: [], weeklyTarget, createdAt: todayLocalDate() };
+      state.commitments.push(commitItem);
+      scheduleReminderFor(commitItem);
+    }
+
     save(state);
+    editingCommitId = null;
     commitText.value='';
     if(commitLabel) commitLabel.value='';
     if(commitTarget) commitTarget.value='';
     if(commitReminderEnabled) commitReminderEnabled.checked = false;
     if(commitReminderTime) commitReminderTime.value = '';
+    document.querySelectorAll('#customDays input[name="commitDay"]').forEach(input=>input.checked=false);
+    addModal.classList.add('hidden');
     renderList();
-    // schedule reminder for this new commit
-    scheduleReminderFor(newCommit);
   });
 
   // Initial render

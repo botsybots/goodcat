@@ -17,6 +17,9 @@ build/
 # logs
 *.log
 
+# server database
+server/data.db
+
 # editor
 .vscode/
 .idea/

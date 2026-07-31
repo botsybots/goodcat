@@ -18,6 +18,11 @@ db.serialize(() => {
     enabled INTEGER DEFAULT 1,
     doneToday INTEGER DEFAULT 0,
     schedule TEXT,
+    scheduleDays TEXT,
+    reminderEnabled INTEGER DEFAULT 0,
+    reminderTime TEXT,
+    lastReminderSent TEXT,
+    weeklyTarget INTEGER,
     streak INTEGER DEFAULT 0,
     lastDone TEXT,
     label TEXT,
@@ -32,6 +37,11 @@ db.serialize(() => {
     if (err) return;
     const names = cols.map(c => c.name);
     if (!names.includes('schedule')) db.run('ALTER TABLE commitments ADD COLUMN schedule TEXT');
+    if (!names.includes('scheduleDays')) db.run('ALTER TABLE commitments ADD COLUMN scheduleDays TEXT');
+    if (!names.includes('reminderEnabled')) db.run('ALTER TABLE commitments ADD COLUMN reminderEnabled INTEGER DEFAULT 0');
+    if (!names.includes('reminderTime')) db.run('ALTER TABLE commitments ADD COLUMN reminderTime TEXT');
+    if (!names.includes('lastReminderSent')) db.run('ALTER TABLE commitments ADD COLUMN lastReminderSent TEXT');
+    if (!names.includes('weeklyTarget')) db.run('ALTER TABLE commitments ADD COLUMN weeklyTarget INTEGER');
     if (!names.includes('streak')) db.run('ALTER TABLE commitments ADD COLUMN streak INTEGER DEFAULT 0');
     if (!names.includes('lastDone')) db.run('ALTER TABLE commitments ADD COLUMN lastDone TEXT');
     if (!names.includes('label')) db.run('ALTER TABLE commitments ADD COLUMN label TEXT');
