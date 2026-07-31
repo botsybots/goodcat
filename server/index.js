@@ -4,22 +4,13 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import cors from 'cors';
 import webpush from 'web-push';
-import { promisify } from 'util';
-import db from './db.js';
+import { dbAll, dbGet, dbRun } from './db.js';
 import { isScheduledDay, computeStreak } from '../schedule-utils.js';
 import { localDateKey } from '../date-utils.js';
 
 const app = express();
 app.use(cors());
 app.use(express.json());
-
-const dbAll = promisify(db.all.bind(db));
-const dbGet = promisify(db.get.bind(db));
-function dbRun(sql, params){
-  return new Promise((resolve, reject) => {
-    db.run(sql, params, function(err){ if(err) reject(err); else resolve(this); });
-  });
-}
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 
@@ -53,15 +44,24 @@ function authMiddleware(req,res,next){
   }
 }
 
+// Unauthenticated health check -- used by the GitHub Actions keep-alive cron
+// to stop the free-tier host from spinning down (which would otherwise stop
+// reminders from firing while nobody has the app open).
+app.get('/api/health', (req,res)=>{
+  res.json({ ok: true });
+});
+
 app.post('/api/register', async (req, res) => {
   const { name, password } = req.body;
   if(!name || !password) return res.status(400).json({ error: 'name and password required' });
-  const hash = await bcrypt.hash(password, 10);
-  db.run('INSERT INTO users (name,password) VALUES (?,?)', [name, hash], function(err){
-    if(err) return res.status(400).json({ error: 'user exists or db error' });
-    const user = { id: this.lastID, name };
+  try{
+    const hash = await bcrypt.hash(password, 10);
+    const result = await dbRun('INSERT INTO users (name,password) VALUES (?,?)', [name, hash]);
+    const user = { id: result.lastID, name };
     res.json({ token: sign(user), user });
-  });
+  }catch(e){
+    res.status(400).json({ error: 'user exists or db error' });
+  }
 });
 
 // Return VAPID public key for subscription
@@ -70,45 +70,49 @@ app.get('/api/vapidPublicKey', (req,res)=>{
 });
 
 // Store push subscription for authenticated user
-app.post('/api/subscribe', authMiddleware, (req,res)=>{
+app.post('/api/subscribe', authMiddleware, async (req,res)=>{
   const sub = req.body;
   if(!sub) return res.status(400).json({ error: 'missing subscription' });
-  const s = JSON.stringify(sub);
-  db.run('INSERT INTO push_subscriptions (user_id, subscription) VALUES (?,?)', [req.user.id, s], function(err){
-    if(err) return res.status(500).json({ error: 'db' });
+  try{
+    await dbRun('INSERT INTO push_subscriptions (user_id, subscription) VALUES (?,?)', [req.user.id, JSON.stringify(sub)]);
     res.json({ success:true });
-  });
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
 });
 
 // Trigger push for a commitment (testing endpoint)
-app.post('/api/send-push/:commitmentId', authMiddleware, (req,res)=>{
+app.post('/api/send-push/:commitmentId', authMiddleware, async (req,res)=>{
   const id = req.params.commitmentId;
-  // get commitment and user
-  db.get('SELECT id, user_id, text FROM commitments WHERE id = ? AND user_id = ?', [id, req.user.id], (err, commit)=>{
-    if(err || !commit) return res.status(404).json({ error: 'not found' });
-    db.all('SELECT subscription FROM push_subscriptions WHERE user_id = ?', [req.user.id], (err2, rows)=>{
-      if(err2) return res.status(500).json({ error: 'db' });
-      const payload = JSON.stringify({ title: 'Reminder', body: 'Time for: ' + commit.text, tag: 'reminder-'+commit.id });
-      const results = [];
-      Promise.all(rows.map(r=>{
-        let sub;
-        try{ sub = JSON.parse(r.subscription); }catch(e){ return Promise.resolve({ ok:false }); }
-        return webpush.sendNotification(sub, payload).then(()=>({ ok:true })).catch(err=>({ ok:false, error: String(err) }));
-      })).then(results=> res.json({ results }));
-    });
-  });
+  try{
+    const commit = await dbGet('SELECT id, user_id, text FROM commitments WHERE id = ? AND user_id = ?', [id, req.user.id]);
+    if(!commit) return res.status(404).json({ error: 'not found' });
+    const rows = await dbAll('SELECT subscription FROM push_subscriptions WHERE user_id = ?', [req.user.id]);
+    const payload = JSON.stringify({ title: 'Reminder', body: 'Time for: ' + commit.text, tag: 'reminder-'+commit.id });
+    const results = await Promise.all(rows.map(r=>{
+      let sub;
+      try{ sub = JSON.parse(r.subscription); }catch(e){ return Promise.resolve({ ok:false }); }
+      return webpush.sendNotification(sub, payload).then(()=>({ ok:true })).catch(err=>({ ok:false, error: String(err) }));
+    }));
+    res.json({ results });
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
 });
 
-app.post('/api/login', (req,res)=>{
+app.post('/api/login', async (req,res)=>{
   const { name, password } = req.body;
   if(!name || !password) return res.status(400).json({ error: 'name and password required' });
-  db.get('SELECT * FROM users WHERE name = ?', [name], async (err,row)=>{
-    if(err || !row) return res.status(400).json({ error: 'invalid credentials' });
+  try{
+    const row = await dbGet('SELECT * FROM users WHERE name = ?', [name]);
+    if(!row) return res.status(400).json({ error: 'invalid credentials' });
     const ok = await bcrypt.compare(password, row.password);
     if(!ok) return res.status(400).json({ error: 'invalid credentials' });
     const user = { id: row.id, name: row.name };
     res.json({ token: sign(user), user });
-  });
+  }catch(e){
+    res.status(400).json({ error: 'invalid credentials' });
+  }
 });
 
 // Returns commitments for BOTH people, not just the caller's own -- this is a
@@ -167,85 +171,95 @@ app.get('/api/commitments', authMiddleware, async (req,res)=>{
   }
 });
 
-app.post('/api/commitments', authMiddleware, (req,res)=>{
+app.post('/api/commitments', authMiddleware, async (req,res)=>{
   const { text, enabled, schedule, scheduleDays, reminderEnabled, reminderTime, weeklyTarget, label, target, achieved, achievedAt, createdAt } = req.body;
   const scheduleDaysJson = scheduleDays ? JSON.stringify(scheduleDays) : null;
   const createdAtVal = createdAt || localDateKey(new Date());
-  db.run('INSERT INTO commitments (user_id,text,enabled,doneToday,schedule,scheduleDays,reminderEnabled,reminderTime,weeklyTarget,streak,lastDone,label,target,achieved,achievedAt,createdAt) VALUES (?,?,?,?,?,?,?,?,?,0,NULL,?,?,?,?,?)', [req.user.id, text, enabled?1:0, 0, schedule||'daily', scheduleDaysJson, reminderEnabled?1:0, reminderTime||null, weeklyTarget||null, label||null, target||null, achieved?1:0, achievedAt||null, createdAtVal], function(err){
-    if(err) return res.status(500).json({ error: 'db' });
-    res.json({ id: this.lastID, text, enabled: !!enabled, doneToday:false, schedule: schedule||'daily', scheduleDays: scheduleDays || null, reminderEnabled: !!reminderEnabled, reminderTime: reminderTime || null, weeklyTarget: weeklyTarget || null, streak:0, lastDone:null, label: label||null, target: target||null, achieved: !!achieved, achievedAt: achievedAt||null, createdAt: createdAtVal });
-  });
+  try{
+    const result = await dbRun(
+      'INSERT INTO commitments (user_id,text,enabled,doneToday,schedule,scheduleDays,reminderEnabled,reminderTime,weeklyTarget,streak,lastDone,label,target,achieved,achievedAt,createdAt) VALUES (?,?,?,?,?,?,?,?,?,0,NULL,?,?,?,?,?)',
+      [req.user.id, text, enabled?1:0, 0, schedule||'daily', scheduleDaysJson, reminderEnabled?1:0, reminderTime||null, weeklyTarget||null, label||null, target||null, achieved?1:0, achievedAt||null, createdAtVal]
+    );
+    res.json({ id: result.lastID, text, enabled: !!enabled, doneToday:false, schedule: schedule||'daily', scheduleDays: scheduleDays || null, reminderEnabled: !!reminderEnabled, reminderTime: reminderTime || null, weeklyTarget: weeklyTarget || null, streak:0, lastDone:null, label: label||null, target: target||null, achieved: !!achieved, achievedAt: achievedAt||null, createdAt: createdAtVal });
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
 });
 
-app.put('/api/commitments/:id', authMiddleware, (req,res)=>{
+app.put('/api/commitments/:id', authMiddleware, async (req,res)=>{
   const id = req.params.id;
   const { text, enabled, doneToday, schedule, scheduleDays, reminderEnabled, reminderTime, weeklyTarget, label, target } = req.body;
   const scheduleDaysJson = scheduleDays ? JSON.stringify(scheduleDays) : null;
-  // If marking doneToday, recompute streak from the full completion_log history
-  // using the same computeStreak() the client uses, so the two never disagree.
-  if (doneToday !== undefined) {
-    db.get('SELECT schedule, scheduleDays, target, achieved, achievedAt FROM commitments WHERE id = ? AND user_id = ?', [id, req.user.id], (err,row)=>{
-      if(err || !row) return res.status(500).json({ error: 'db' });
+  try{
+    // If marking doneToday, recompute streak from the full completion_log
+    // history using the same computeStreak() the client uses, so the two
+    // never disagree.
+    if (doneToday !== undefined) {
+      const row = await dbGet('SELECT schedule, scheduleDays, target, achieved, achievedAt FROM commitments WHERE id = ? AND user_id = ?', [id, req.user.id]);
+      if(!row) return res.status(404).json({ error: 'not found' });
       const today = localDateKey(new Date());
       const effectiveScheduleDays = scheduleDays !== undefined ? scheduleDays : (row.scheduleDays ? JSON.parse(row.scheduleDays) : null);
       const effectiveScheduleDaysJson = effectiveScheduleDays ? JSON.stringify(effectiveScheduleDays) : null;
       const commitForStreak = { schedule: schedule || row.schedule, scheduleDays: effectiveScheduleDays };
 
-      const applyCompletionLog = (cb) => {
-        if (doneToday) {
-          db.run('INSERT INTO completion_log (commitment_id, user_id, date, count) VALUES (?,?,?,1) ON CONFLICT(commitment_id, date) DO UPDATE SET count = count + 1', [id, req.user.id, today], cb);
-        } else {
-          db.run('DELETE FROM completion_log WHERE commitment_id = ? AND user_id = ? AND date = ?', [id, req.user.id, today], cb);
-        }
-      };
+      if (doneToday) {
+        await dbRun('INSERT INTO completion_log (commitment_id, user_id, date, count) VALUES (?,?,?,1) ON CONFLICT(commitment_id, date) DO UPDATE SET count = count + 1', [id, req.user.id, today]);
+      } else {
+        await dbRun('DELETE FROM completion_log WHERE commitment_id = ? AND user_id = ? AND date = ?', [id, req.user.id, today]);
+      }
 
-      applyCompletionLog((logErr) => {
-        if (logErr) console.error('log update err', logErr);
-        db.all('SELECT date FROM completion_log WHERE commitment_id = ? AND user_id = ?', [id, req.user.id], (histErr, historyRows) => {
-          if (histErr) return res.status(500).json({ error: 'db' });
-          const historyDates = historyRows.map(r => r.date);
-          const newStreak = computeStreak(commitForStreak, historyDates, today);
-          const newLast = historyDates.length ? historyDates.reduce((a, b) => (a > b ? a : b)) : null;
-          const targetVal = target !== undefined ? target : row.target;
-          let achieved = !!row.achieved;
-          let achievedAt = row.achievedAt || null;
-          if (targetVal && newStreak >= targetVal) {
-            if (!achieved) { achieved = true; achievedAt = today; }
-          } else if (targetVal) {
-            achieved = false;
-            achievedAt = null;
-          }
-          db.run('UPDATE commitments SET text = ?, enabled = ?, doneToday = ?, schedule = ?, scheduleDays = ?, reminderEnabled = ?, reminderTime = ?, weeklyTarget = ?, streak = ?, lastDone = ?, label = ?, target = ?, achieved = ?, achievedAt = ? WHERE id = ? AND user_id = ?', [text, enabled?1:0, doneToday?1:0, schedule||row.schedule||null, effectiveScheduleDaysJson, reminderEnabled?1:0, reminderTime||null, weeklyTarget||null, newStreak, newLast, label||null, targetVal||null, achieved?1:0, achievedAt, id, req.user.id], function(err2){
-            if(err2) return res.status(500).json({ error: 'db' });
-            res.json({ success:true, streak:newStreak, lastDone:newLast, achieved, achievedAt });
-          });
-        });
-      });
-    });
-  } else {
-    db.run('UPDATE commitments SET text = ?, enabled = ?, schedule = ?, scheduleDays = ?, reminderEnabled = ?, reminderTime = ?, weeklyTarget = ?, label = ?, target = ? WHERE id = ? AND user_id = ?', [text, enabled?1:0, schedule||null, scheduleDaysJson, reminderEnabled?1:0, reminderTime||null, weeklyTarget||null, label||null, target||null, id, req.user.id], function(err){
+      const historyRows = await dbAll('SELECT date FROM completion_log WHERE commitment_id = ? AND user_id = ?', [id, req.user.id]);
+      const historyDates = historyRows.map(r => r.date);
+      const newStreak = computeStreak(commitForStreak, historyDates, today);
+      const newLast = historyDates.length ? historyDates.reduce((a, b) => (a > b ? a : b)) : null;
+      const targetVal = target !== undefined ? target : row.target;
+      let achieved = !!row.achieved;
+      let achievedAt = row.achievedAt || null;
+      if (targetVal && newStreak >= targetVal) {
+        if (!achieved) { achieved = true; achievedAt = today; }
+      } else if (targetVal) {
+        achieved = false;
+        achievedAt = null;
+      }
+      await dbRun(
+        'UPDATE commitments SET text = ?, enabled = ?, doneToday = ?, schedule = ?, scheduleDays = ?, reminderEnabled = ?, reminderTime = ?, weeklyTarget = ?, streak = ?, lastDone = ?, label = ?, target = ?, achieved = ?, achievedAt = ? WHERE id = ? AND user_id = ?',
+        [text, enabled?1:0, doneToday?1:0, schedule||row.schedule||null, effectiveScheduleDaysJson, reminderEnabled?1:0, reminderTime||null, weeklyTarget||null, newStreak, newLast, label||null, targetVal||null, achieved?1:0, achievedAt, id, req.user.id]
+      );
+      res.json({ success:true, streak:newStreak, lastDone:newLast, achieved, achievedAt });
+    } else {
+      await dbRun(
+        'UPDATE commitments SET text = ?, enabled = ?, schedule = ?, scheduleDays = ?, reminderEnabled = ?, reminderTime = ?, weeklyTarget = ?, label = ?, target = ? WHERE id = ? AND user_id = ?',
+        [text, enabled?1:0, schedule||null, scheduleDaysJson, reminderEnabled?1:0, reminderTime||null, weeklyTarget||null, label||null, target||null, id, req.user.id]
+      );
       res.json({ success: true });
-    });
+    }
+  }catch(e){
+    console.error('PUT /api/commitments error', e);
+    res.status(500).json({ error: 'db' });
   }
 });
 
 // Return history for a commitment (dates). Not scoped to the requester's own
 // user_id -- like the rest of GET /api/commitments, viewing the other
 // person's history is the point of cross-visibility, not a privacy leak.
-app.get('/api/commitments/:id/history', authMiddleware, (req,res)=>{
+app.get('/api/commitments/:id/history', authMiddleware, async (req,res)=>{
   const id = req.params.id;
-  db.all('SELECT date, count FROM completion_log WHERE commitment_id = ? ORDER BY date DESC', [id], (err, rows)=>{
-    if(err) return res.status(500).json({ error: 'db' });
+  try{
+    const rows = await dbAll('SELECT date, count FROM completion_log WHERE commitment_id = ? ORDER BY date DESC', [id]);
     res.json(rows.map(r=>({ date: r.date, count: r.count || 1 })));
-  });
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
 });
 
-app.delete('/api/commitments/:id', authMiddleware, (req,res)=>{
+app.delete('/api/commitments/:id', authMiddleware, async (req,res)=>{
   const id = req.params.id;
-  db.run('DELETE FROM commitments WHERE id = ? AND user_id = ?', [id, req.user.id], function(err){
-    if(err) return res.status(500).json({ error: 'db' });
+  try{
+    await dbRun('DELETE FROM commitments WHERE id = ? AND user_id = ?', [id, req.user.id]);
     res.json({ success: true });
-  });
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
 });
 
 // Give a paw to someone else's habit. Capped at one per commitment per day by
@@ -322,22 +336,22 @@ function sendPushToSubscriptions(subscriptions, payload){
   }));
 }
 
-function checkDueReminders(){
+async function checkDueReminders(){
   const now = new Date();
-  db.all('SELECT id, user_id, text, reminderEnabled, reminderTime, schedule, scheduleDays, enabled, lastReminderSent FROM commitments WHERE reminderEnabled = 1 AND reminderTime IS NOT NULL', (err, commits)=>{
-    if(err || !commits || !commits.length) return;
-    commits.forEach(commit => {
+  try{
+    const commits = await dbAll('SELECT id, user_id, text, reminderEnabled, reminderTime, schedule, scheduleDays, enabled, lastReminderSent FROM commitments WHERE reminderEnabled = 1 AND reminderTime IS NOT NULL');
+    for(const commit of commits){
       commit.scheduleDays = commit.scheduleDays ? JSON.parse(commit.scheduleDays) : null;
-      if(!shouldSendReminder(commit, now)) return;
-      db.all('SELECT subscription FROM push_subscriptions WHERE user_id = ?', [commit.user_id], (err2, rows)=>{
-        if(err2 || !rows || !rows.length) return;
-        const payload = JSON.stringify({ title: 'Good Cat Reminder', body: `Time for: ${commit.text}`, tag: `reminder-${commit.id}` });
-        sendPushToSubscriptions(rows, payload).then(results=>{
-          db.run('UPDATE commitments SET lastReminderSent = ? WHERE id = ?', [localDateKey(now), commit.id], ()=>{});
-        });
-      });
-    });
-  });
+      if(!shouldSendReminder(commit, now)) continue;
+      const rows = await dbAll('SELECT subscription FROM push_subscriptions WHERE user_id = ?', [commit.user_id]);
+      if(!rows.length) continue;
+      const payload = JSON.stringify({ title: 'Good Cat Reminder', body: `Time for: ${commit.text}`, tag: `reminder-${commit.id}` });
+      await sendPushToSubscriptions(rows, payload);
+      await dbRun('UPDATE commitments SET lastReminderSent = ? WHERE id = ?', [localDateKey(now), commit.id]);
+    }
+  }catch(e){
+    console.error('checkDueReminders error', e);
+  }
 }
 
 setInterval(checkDueReminders, 60 * 1000);
