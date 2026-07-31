@@ -777,6 +777,37 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     showToast('Meow sent!', `${userName(fromUserId)} left a note.`);
   }
 
+  // A row of the last 7 days (today included) so a habit's recent pattern
+  // is visible at a glance, without opening History. "N times a week"
+  // habits have no specific due day, so a day is never marked "missed" for
+  // them -- only "complete" (done) or neutral, to avoid implying a daily
+  // obligation that doesn't exist.
+  function buildWeekStrip(c){
+    const strip = document.createElement('div'); strip.className = 'week-strip';
+    const todayIso = appToday();
+    const isWeekly = isWeeklyTargetSchedule(c);
+    getWindowDates(todayIso, 7).forEach(dateIso => {
+      const cell = document.createElement('div'); cell.className = 'week-day';
+      const dateObj = parseLocalDate(dateIso);
+      const withinLifetime = !c.createdAt || c.createdAt <= dateIso;
+      const done = withinLifetime && Array.isArray(c.history) && c.history.includes(dateIso);
+      const due = withinLifetime && !isWeekly && isScheduledDay(c, dateIso);
+      if(done) cell.classList.add('is-complete');
+      else if(due && dateIso !== todayIso) cell.classList.add('is-missed');
+      else if(due) cell.classList.add('is-pending'); // due today, day isn't over yet
+      else cell.classList.add('is-off');
+      if(dateIso === todayIso) cell.classList.add('is-today');
+      const label = document.createElement('span'); label.className = 'week-day-label';
+      label.textContent = dateObj.toLocaleDateString('en-US', { weekday: 'narrow' });
+      const circle = document.createElement('span'); circle.className = 'week-day-circle';
+      circle.textContent = String(dateObj.getDate());
+      cell.appendChild(label);
+      cell.appendChild(circle);
+      strip.appendChild(cell);
+    });
+    return strip;
+  }
+
   function renderCommitmentsForUser(userId, targetList){
     targetList.innerHTML = '';
     const visible = state.commitments.filter(c => c.for === userId);
@@ -856,6 +887,8 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
       topRow.appendChild(body);
       topRow.appendChild(sideActions);
       li.appendChild(topRow);
+
+      li.appendChild(buildWeekStrip(c));
 
       if(c.target){
         const progress = document.createElement('div'); progress.className = 'card-progress';

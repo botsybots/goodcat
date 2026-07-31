@@ -591,6 +591,61 @@ button.menu-item:hover {
   gap: 6px;
 }
 
+.week-strip {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  margin-top: 10px;
+}
+
+.week-day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  flex: 1;
+}
+
+.week-day-label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.week-day-circle {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  border: 1.5px solid var(--border);
+  color: var(--muted);
+  background: transparent;
+}
+
+.week-day.is-complete .week-day-circle {
+  background: var(--secondary);
+  border-color: var(--secondary);
+  color: #fff;
+}
+
+.week-day.is-missed .week-day-circle {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.week-day.is-off .week-day-circle {
+  opacity: 0.4;
+}
+
+.week-day.is-today .week-day-circle {
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
 .comment-preview {
   margin-top: 8px;
   padding: 10px 12px;
