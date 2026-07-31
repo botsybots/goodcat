@@ -81,9 +81,23 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   const MAX_LIVES = 9;
   const RESET_LIVES_AFTER_COUNCIL = 3;
 
+  function decodeJwtPayload(token){
+    try{
+      const base64 = token.split('.')[1];
+      const json = decodeURIComponent(atob(base64.replace(/-/g,'+').replace(/_/g,'/')).split('').map(c=>'%'+('00'+c.charCodeAt(0).toString(16)).slice(-2)).join(''));
+      return JSON.parse(json);
+    }catch(e){ return null; }
+  }
+
   let authToken = localStorage.getItem('accountability:token') || null;
-  if(authToken) apiBaseInput.value = localStorage.getItem('accountability:api') || 'http://localhost:3000';
-  setLoginStatus(authToken ? 'Logged in' : 'Logged out');
+  if(authToken){
+    apiBaseInput.value = localStorage.getItem('accountability:api') || 'http://localhost:3000';
+    const payload = decodeJwtPayload(authToken);
+    if(payload) adoptIdentityFromLogin(payload);
+    setToken(authToken);
+  } else {
+    setLoginStatus('Logged out');
+  }
 
   // Notification controls
   let notifyTimers = new Map();
@@ -139,6 +153,23 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   function userName(id){
     const user = state.users.find(u => u.id === id);
     return user ? user.name : id;
+  }
+
+  // Once logged in, each phone belongs to one person -- their identity comes
+  // from login, not the "You are" dropdown, and they can only edit their own
+  // habits. Logged out (or never logged in), the app behaves exactly as
+  // before: one shared device, either column editable, no server involved.
+  function isRemoteMode(){
+    return !!authToken;
+  }
+
+  function canEditCommit(c){
+    return !isRemoteMode() || c.for === currentUser;
+  }
+
+  function lockIdentityControls(locked){
+    if(activeUserSelect) activeUserSelect.disabled = locked;
+    if(commitFor) commitFor.disabled = locked;
   }
 
   // The app's "now" — real wall-clock time, shifted forward by any debug day
@@ -405,7 +436,51 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     }
   });
 
+  // Pushes one commitment's current fields to the server: creates it if it
+  // has no remoteId yet, otherwise updates it in place. Used after any local
+  // change to your own commitment (done-toggle, add/edit, reminder change) so
+  // the other person's phone picks it up on its next sync, rather than
+  // waiting for a manual push.
+  async function pushCommitmentToServer(c){
+    if(!authToken) return;
+    const payload = {
+      text: c.text, enabled: c.enabled, doneToday: c.doneToday, schedule: c.schedule,
+      scheduleDays: c.scheduleDays || null, reminderEnabled: c.reminderEnabled || false,
+      reminderTime: c.reminderTime || null, weeklyTarget: c.weeklyTarget || null,
+      label: c.label || null, target: c.target || null, achieved: c.achieved || false,
+      achievedAt: c.achievedAt || null, createdAt: c.createdAt || null
+    };
+    try{
+      let res;
+      if(c.remoteId){
+        res = await fetch(apiBase() + '/api/commitments/' + c.remoteId, { method: 'PUT', headers: { 'content-type':'application/json', 'authorization':'Bearer '+authToken }, body: JSON.stringify(payload) });
+      } else {
+        res = await fetch(apiBase() + '/api/commitments', { method: 'POST', headers: { 'content-type':'application/json', 'authorization':'Bearer '+authToken }, body: JSON.stringify(payload) });
+      }
+      if(res.ok){
+        const j = await res.json();
+        c.remoteId = j.id || c.remoteId;
+        if(j.streak !== undefined) c.streak = j.streak;
+        if(j.lastDone !== undefined) c.lastDone = j.lastDone;
+        if(j.achieved !== undefined) c.achieved = j.achieved || c.achieved;
+        if(j.achievedAt !== undefined) c.achievedAt = j.achievedAt || c.achievedAt;
+        save(state);
+      }
+    }catch(e){ console.error('push commitment failed', e); }
+  }
+
+  async function deleteCommitmentFromServer(c){
+    if(!authToken || !c.remoteId) return;
+    try{
+      await fetch(apiBase() + '/api/commitments/' + c.remoteId, { method: 'DELETE', headers: { authorization: 'Bearer '+authToken } });
+    }catch(e){ console.error('delete push failed', e); }
+  }
+
   function toggleCommitDone(c){
+    if(!canEditCommit(c)){
+      showToast('Not yours to mark', `Only ${userName(c.for)} can mark "${c.text}" done.`);
+      return;
+    }
     const today = appToday();
     c.history = c.history || [];
     if(!c.doneToday){
@@ -429,28 +504,78 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     updateLivesForUser(c.for);
     renderList();
     scheduleReminderFor(c);
-    if(authToken && c.remoteId){
-      fetch(apiBase() + '/api/commitments/' + c.remoteId, { method: 'PUT', headers: { 'content-type':'application/json', 'authorization':'Bearer '+authToken }, body: JSON.stringify({ text: c.text, enabled: c.enabled, doneToday: c.doneToday, schedule: c.schedule, label: c.label, target: c.target, achieved: c.achieved, achievedAt: c.achievedAt }) }).then(r=>r.json()).then(j=>{
-        if(j && j.streak!==undefined) { c.streak = j.streak; c.lastDone = j.lastDone; c.achieved = j.achieved||c.achieved; c.achievedAt = j.achievedAt||c.achievedAt; save(state); renderList(); }
-      }).catch(()=>{});
-    }
+    pushCommitmentToServer(c);
+  }
+
+  // Once a commitment is synced, the server is the source of truth for paw
+  // counts/attribution (c.pawCount/c.lastPaw) since both people's paws need
+  // to be visible to each other. Local-only/offline commitments fall back to
+  // the plain local pawLog array.
+  function lastPawFor(c){
+    if(c.lastPaw !== undefined) return c.lastPaw;
+    if(Array.isArray(c.pawLog) && c.pawLog.length) return c.pawLog[c.pawLog.length - 1];
+    return null;
   }
 
   function hasPawedToday(c){
-    return Array.isArray(c.pawLog) && c.pawLog.some(p => p.date === appToday());
+    const last = lastPawFor(c);
+    return !!last && last.date === appToday();
   }
 
   function pawCountFor(c){
+    if(c.pawCount !== undefined) return c.pawCount;
     return Array.isArray(c.pawLog) ? c.pawLog.length : (c.paws || 0);
   }
 
-  function givePaw(c, fromUserId){
+  async function givePaw(c, fromUserId){
     if(hasPawedToday(c)) return;
-    c.pawLog = c.pawLog || [];
-    c.pawLog.push({ date: appToday(), by: fromUserId });
+    if(isRemoteMode() && c.remoteId){
+      try{
+        const res = await fetch(apiBase() + '/api/commitments/' + c.remoteId + '/paws', { method: 'POST', headers: { authorization: 'Bearer '+authToken } });
+        if(res.ok){
+          const j = await res.json();
+          c.pawCount = j.pawCount;
+          c.lastPaw = j.lastPaw;
+        }
+      }catch(e){ console.error('paw push failed', e); }
+    } else {
+      c.pawLog = c.pawLog || [];
+      c.pawLog.push({ date: appToday(), by: fromUserId });
+    }
     save(state);
     renderList();
     showToast('Paw sent!', `${userName(fromUserId)} cheered on “${c.text}”.`);
+  }
+
+  // Comments mirror the same source-of-truth split as paws: server-backed
+  // once synced (c.lastComment), plain local array otherwise.
+  function lastCommentFor(c){
+    if(c.lastComment !== undefined) return c.lastComment;
+    if(Array.isArray(c.comments) && c.comments.length){
+      const text = c.comments[c.comments.length - 1];
+      return typeof text === 'string' ? { text, by: null } : text;
+    }
+    return null;
+  }
+
+  async function addComment(c, fromUserId){
+    const text = (prompt('Leave a note on "' + c.text + '"') || '').trim();
+    if(!text) return;
+    if(isRemoteMode() && c.remoteId){
+      try{
+        const res = await fetch(apiBase() + '/api/commitments/' + c.remoteId + '/comments', { method: 'POST', headers: { 'content-type':'application/json', authorization: 'Bearer '+authToken }, body: JSON.stringify({ text }) });
+        if(res.ok){
+          const j = await res.json();
+          c.lastComment = j.lastComment;
+        }
+      }catch(e){ console.error('comment push failed', e); }
+    } else {
+      c.comments = c.comments || [];
+      c.comments.push(text);
+    }
+    save(state);
+    renderList();
+    showToast('Meow sent!', `${userName(fromUserId)} left a note.`);
   }
 
   function renderCommitmentsForUser(userId, targetList){
@@ -497,6 +622,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
         pawBtn.addEventListener('click', ()=> givePaw(c, currentUser));
         sideActions.appendChild(pawBtn);
       }
+      const owned = canEditCommit(c);
       const menuBtn = document.createElement('button');
       menuBtn.type = 'button';
       menuBtn.className = 'card-menu-btn';
@@ -526,61 +652,74 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
 
       const pawCount = pawCountFor(c);
       if(pawCount > 0){
-        const lastPaw = Array.isArray(c.pawLog) && c.pawLog.length ? c.pawLog[c.pawLog.length - 1] : null;
+        const lastPaw = lastPawFor(c);
         const pawChip = document.createElement('div'); pawChip.className = 'paw-chip';
-        pawChip.textContent = lastPaw ? `🐾 ${pawCount} · last from ${userName(lastPaw.by)}` : `🐾 ${pawCount}`;
+        pawChip.textContent = lastPaw && lastPaw.by ? `🐾 ${pawCount} · last from ${userName(lastPaw.by.toLowerCase ? lastPaw.by.toLowerCase() : lastPaw.by)}` : `🐾 ${pawCount}`;
         li.appendChild(pawChip);
       }
 
-      if(c.comments && c.comments.length){
+      const lastComment = lastCommentFor(c);
+      if(lastComment){
         const commentPreview = document.createElement('div');
         commentPreview.className = 'comment-preview';
-        commentPreview.textContent = `Latest meow: ${c.comments[c.comments.length-1]}`;
+        const byName = lastComment.by ? userName(lastComment.by.toLowerCase ? lastComment.by.toLowerCase() : lastComment.by) : null;
+        commentPreview.textContent = byName ? `Latest meow from ${byName}: ${lastComment.text}` : `Latest meow: ${lastComment.text}`;
         li.appendChild(commentPreview);
       }
 
-      // Overflow menu: Edit / Reminder / History / Delete
+      // Overflow menu: Edit/Reminder/Delete are owner-only once logged in;
+      // History and Comment are open to both, since viewing/encouraging is
+      // the whole point of the other person seeing your habits.
       const menu = document.createElement('div'); menu.className = 'card-menu hidden';
 
-      const editBtn = document.createElement('button'); editBtn.type='button'; editBtn.className='menu-item'; editBtn.textContent = '✏️ Edit';
-      editBtn.addEventListener('click', ()=>{ closeAllCardMenus(); openEditCommit(c); });
+      if(owned){
+        const editBtn = document.createElement('button'); editBtn.type='button'; editBtn.className='menu-item'; editBtn.textContent = '✏️ Edit';
+        editBtn.addEventListener('click', ()=>{ closeAllCardMenus(); openEditCommit(c); });
+        menu.appendChild(editBtn);
 
-      const reminderRow = document.createElement('div'); reminderRow.className = 'menu-item menu-reminder';
-      const reminderToggle = document.createElement('label'); reminderToggle.className = 'toggle-switch small';
-      reminderToggle.innerHTML = `<input type="checkbox" ${c.reminderEnabled ? 'checked':''}/><span class="toggle-slider"></span><span class="toggle-label">Reminder</span>`;
-      const reminderCheckbox = reminderToggle.querySelector('input');
-      const reminderTimeInput = document.createElement('input');
-      reminderTimeInput.type = 'time';
-      reminderTimeInput.className = 'menu-reminder-time';
-      reminderTimeInput.value = c.reminderTime || '';
-      function saveReminder(){
-        c.reminderEnabled = reminderCheckbox.checked;
-        c.reminderTime = reminderTimeInput.value || null;
-        save(state);
-        scheduleReminderFor(c);
-        renderList();
+        const reminderRow = document.createElement('div'); reminderRow.className = 'menu-item menu-reminder';
+        const reminderToggle = document.createElement('label'); reminderToggle.className = 'toggle-switch small';
+        reminderToggle.innerHTML = `<input type="checkbox" ${c.reminderEnabled ? 'checked':''}/><span class="toggle-slider"></span><span class="toggle-label">Reminder</span>`;
+        const reminderCheckbox = reminderToggle.querySelector('input');
+        const reminderTimeInput = document.createElement('input');
+        reminderTimeInput.type = 'time';
+        reminderTimeInput.className = 'menu-reminder-time';
+        reminderTimeInput.value = c.reminderTime || '';
+        function saveReminder(){
+          c.reminderEnabled = reminderCheckbox.checked;
+          c.reminderTime = reminderTimeInput.value || null;
+          save(state);
+          scheduleReminderFor(c);
+          pushCommitmentToServer(c);
+          renderList();
+        }
+        reminderCheckbox.addEventListener('change', saveReminder);
+        reminderTimeInput.addEventListener('change', saveReminder);
+        reminderRow.appendChild(reminderToggle);
+        reminderRow.appendChild(reminderTimeInput);
+        menu.appendChild(reminderRow);
       }
-      reminderCheckbox.addEventListener('change', saveReminder);
-      reminderTimeInput.addEventListener('change', saveReminder);
-      reminderRow.appendChild(reminderToggle);
-      reminderRow.appendChild(reminderTimeInput);
 
       const histBtn = document.createElement('button'); histBtn.type='button'; histBtn.className='menu-item'; histBtn.textContent='📅 History';
       histBtn.addEventListener('click', ()=>{ closeAllCardMenus(); showHistory(c); });
-
-      const del = document.createElement('button'); del.type='button'; del.className='menu-item danger'; del.textContent='🗑 Delete';
-      del.addEventListener('click', ()=>{
-        closeAllCardMenus();
-        if(!confirm(`Delete “${c.text}”? This cannot be undone.`)) return;
-        state.commitments = state.commitments.filter(x=>x.id!==c.id);
-        save(state);
-        renderList();
-      });
-
-      menu.appendChild(editBtn);
-      menu.appendChild(reminderRow);
       menu.appendChild(histBtn);
-      menu.appendChild(del);
+
+      const commentBtn = document.createElement('button'); commentBtn.type='button'; commentBtn.className='menu-item'; commentBtn.textContent='💬 Add a comment';
+      commentBtn.addEventListener('click', ()=>{ closeAllCardMenus(); addComment(c, currentUser); });
+      menu.appendChild(commentBtn);
+
+      if(owned){
+        const del = document.createElement('button'); del.type='button'; del.className='menu-item danger'; del.textContent='🗑 Delete';
+        del.addEventListener('click', ()=>{
+          closeAllCardMenus();
+          if(!confirm(`Delete “${c.text}”? This cannot be undone.`)) return;
+          deleteCommitmentFromServer(c);
+          state.commitments = state.commitments.filter(x=>x.id!==c.id);
+          save(state);
+          renderList();
+        });
+        menu.appendChild(del);
+      }
       li.appendChild(menu);
 
       menuBtn.addEventListener('click', (event)=>{
@@ -626,13 +765,24 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     URL.revokeObjectURL(url);
   }
 
+  // Once logged in as "anna" or "jordan", that becomes who you are on this
+  // device -- no more manually picking from the dropdown, since the whole
+  // point of separate phones is that each one already knows whose it is.
+  function adoptIdentityFromLogin(user){
+    const name = (user && user.name || '').toLowerCase();
+    if(name === 'anna' || name === 'jordan'){
+      currentUser = name;
+      renderUsers();
+    }
+  }
+
   async function register(){
     const name = authName.value.trim();
     const password = authPass.value;
     if(!name||!password) return alert('enter name+password');
     const res = await fetch(apiBase() + '/api/register', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ name, password }) });
     const j = await res.json();
-    if(res.ok){ setToken(j.token); alert('registered'); } else alert(j.error||JSON.stringify(j));
+    if(res.ok){ adoptIdentityFromLogin(j.user); setToken(j.token); alert('registered'); } else alert(j.error||JSON.stringify(j));
   }
 
   async function login(){
@@ -641,8 +791,10 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     if(!name||!password) return alert('enter name+password');
     const res = await fetch(apiBase() + '/api/login', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ name, password }) });
     const j = await res.json();
-    if(res.ok){ setToken(j.token); alert('logged in'); } else alert(j.error||JSON.stringify(j));
+    if(res.ok){ adoptIdentityFromLogin(j.user); setToken(j.token); showToast('Logged in', `Syncing as ${userName(currentUser)}.`); } else alert(j.error||JSON.stringify(j));
   }
+
+  let syncIntervalId = null;
 
   function setToken(t){
     authToken = t;
@@ -651,10 +803,16 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
       localStorage.setItem('accountability:api', apiBase());
       btnLogout.style.display='inline';
       setLoginStatus('Logged in');
+      lockIdentityControls(true);
+      runSync();
+      if(syncIntervalId) clearInterval(syncIntervalId);
+      syncIntervalId = setInterval(runSync, 20000);
     } else {
       localStorage.removeItem('accountability:token');
       btnLogout.style.display='none';
       setLoginStatus('Logged out');
+      lockIdentityControls(false);
+      if(syncIntervalId){ clearInterval(syncIntervalId); syncIntervalId = null; }
     }
   }
 
@@ -692,79 +850,74 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   btnLogout.addEventListener('click', ()=>{ setToken(null); setLoginStatus('Logged out'); alert('logged out'); });
   btnExportData.addEventListener('click', exportBackup);
 
-  // Push local commitments to remote for current logged-in user (create/replace)
-  async function syncPush(){
-    if(!authToken) return alert('login first');
-    const toPush = state.commitments.filter(c=>c.for===currentUser);
-    for(const c of toPush){
-      const payload = {
-        text: c.text,
-        enabled: c.enabled,
-        schedule: c.schedule,
-        scheduleDays: c.scheduleDays || null,
-        reminderEnabled: c.reminderEnabled || false,
-        reminderTime: c.reminderTime || null,
-        weeklyTarget: c.weeklyTarget || null,
-        label: c.label || null,
-        target: c.target || null,
-        achieved: c.achieved || false,
-        achievedAt: c.achievedAt || null
-      };
-      try{
-        let res;
-        if(c.remoteId){
-          res = await fetch(apiBase() + '/api/commitments/' + c.remoteId, { method: 'PUT', headers: { 'content-type':'application/json', 'authorization': 'Bearer '+authToken }, body: JSON.stringify(payload) });
-        } else {
-          res = await fetch(apiBase() + '/api/commitments', { method: 'POST', headers: { 'content-type':'application/json', 'authorization': 'Bearer '+authToken }, body: JSON.stringify(payload) });
-        }
-        if(res.ok){ const j = await res.json(); c.remoteId = j.id || c.remoteId; c.streak = j.streak||c.streak||0; c.lastDone = j.lastDone||c.lastDone||null; c.achieved = j.achieved||c.achieved; c.achievedAt = j.achievedAt||c.achievedAt||null; save(state); }
-      }catch(e){ console.error('syncPush item failed', e); }
-    }
-    alert('push complete');
+  // Non-destructive sync: merges the server's view into local state instead
+  // of replacing it. Runs on login, every 20s while logged in, after local
+  // pushes, and on demand via the Sync button -- so paws/comments/edits from
+  // the other person's phone show up here without either side ever wiping
+  // the other's data.
+  async function fetchHistoryFor(remoteId){
+    try{
+      const res = await fetch(apiBase() + '/api/commitments/' + remoteId + '/history', { headers: { authorization: 'Bearer '+authToken } });
+      if(!res.ok) return [];
+      const rows = await res.json();
+      return rows.map(r => r.date);
+    }catch(e){ return []; }
   }
 
-  async function syncPull(){
-    if(!authToken) return alert('login first');
-    const res = await fetch(apiBase() + '/api/commitments', { headers: { 'authorization': 'Bearer '+authToken } });
-    if(!res.ok) return alert('pull failed');
-    const list = await res.json();
-    // replace local commitments for currentUser with pulled ones
-    state.commitments = state.commitments.filter(c=>c.for!==currentUser);
-    for(const r of list){
-      let scheduleDays = null;
-      if(r.scheduleDays){
-        try{ scheduleDays = Array.isArray(r.scheduleDays) ? r.scheduleDays : JSON.parse(r.scheduleDays); } catch(e){ scheduleDays = null; }
-      }
-        state.commitments.push({
-        id: 'r'+r.id,
-        text: r.text,
-        for: currentUser,
-        enabled: !!r.enabled,
-        doneToday: !!r.doneToday,
-        schedule: r.schedule||'daily',
-        scheduleDays,
-        streak: r.streak||0,
-        lastDone: r.lastDone||null,
-        remoteId: r.id,
-        label: r.label||null,
-        target: r.target||null,
-        achieved: !!r.achieved,
-        achievedAt: r.achievedAt||null,
-        history: [],
-        reminderEnabled: !!r.reminderEnabled,
-        reminderTime: r.reminderTime||null,
-        weeklyTarget: r.weeklyTarget||null,
-        createdAt: r.createdAt || appToday()
-      });
+  async function mergeRemoteCommitment(r){
+    let scheduleDays = null;
+    if(r.scheduleDays){
+      scheduleDays = Array.isArray(r.scheduleDays) ? r.scheduleDays : (()=>{ try{ return JSON.parse(r.scheduleDays); }catch(e){ return null; } })();
     }
-    save(state);
-    renderList();
-    alert('pull complete');
+    const history = await fetchHistoryFor(r.id);
+    let local = state.commitments.find(c => c.remoteId === r.id);
+    if(!local){
+      local = { id: 'r'+r.id, remoteId: r.id, pawLog: [], comments: [] };
+      state.commitments.push(local);
+    }
+    local.text = r.text;
+    local.for = r.for;
+    local.enabled = r.enabled;
+    local.schedule = r.schedule;
+    local.scheduleDays = scheduleDays;
+    local.reminderEnabled = r.reminderEnabled;
+    local.reminderTime = r.reminderTime;
+    local.weeklyTarget = r.weeklyTarget;
+    local.label = r.label;
+    local.target = r.target;
+    local.history = history;
+    local.createdAt = r.createdAt || local.createdAt || appToday();
+    local.pawCount = r.pawCount;
+    local.lastPaw = r.lastPaw;
+    local.lastComment = r.lastComment;
+  }
+
+  async function pushUnsyncedLocalCommitments(){
+    const unsynced = state.commitments.filter(c => c.for === currentUser && !c.remoteId);
+    for(const c of unsynced) await pushCommitmentToServer(c);
+  }
+
+  async function runSync(){
+    if(!authToken) return;
+    try{
+      await pushUnsyncedLocalCommitments();
+      const res = await fetch(apiBase() + '/api/commitments', { headers: { authorization: 'Bearer '+authToken } });
+      if(!res.ok) return;
+      const list = await res.json();
+      for(const r of list) await mergeRemoteCommitment(r);
+      // Drop local copies of commitments that were synced before but no
+      // longer exist on the server (deleted by their owner elsewhere).
+      const remoteIds = new Set(list.map(r => r.id));
+      state.commitments = state.commitments.filter(c => !c.remoteId || remoteIds.has(c.remoteId));
+      save(state);
+      renderList();
+    }catch(e){ console.error('sync failed', e); }
   }
 
   btnSync.addEventListener('click', async ()=>{
-    const ok = confirm('Sync: push local -> remote? (OK) Pull remote -> local? (Cancel)');
-    if(ok) await syncPush(); else await syncPull();
+    if(!authToken) return alert('login first');
+    await runSync();
+    showToast('Synced', 'Up to date with the server.');
   });
 
   settingsBtn.addEventListener('click', ()=> settingsPanel.classList.remove('hidden'));
@@ -1007,6 +1160,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     document.querySelectorAll('#customDays input[name="commitDay"]').forEach(input=>input.checked=false);
     addModal.classList.add('hidden');
     renderList();
+    if(commitItem && commitItem.for === currentUser) pushCommitmentToServer(commitItem);
   });
 
   // Initial render

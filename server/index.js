@@ -120,7 +120,7 @@ app.get('/api/commitments', authMiddleware, async (req,res)=>{
     const rows = await dbAll(`
       SELECT c.id, c.text, c.enabled, c.doneToday, c.schedule, c.scheduleDays,
              c.reminderEnabled, c.reminderTime, c.weeklyTarget, c.streak, c.lastDone,
-             c.label, c.target, c.achieved, c.achievedAt, c.user_id as ownerId, u.name as ownerName
+             c.label, c.target, c.achieved, c.achievedAt, c.createdAt, c.user_id as ownerId, u.name as ownerName
       FROM commitments c
       JOIN users u ON u.id = c.user_id
     `);
@@ -150,6 +150,7 @@ app.get('/api/commitments', authMiddleware, async (req,res)=>{
         target: r.target || null,
         achieved: !!r.achieved,
         achievedAt: r.achievedAt,
+        createdAt: r.createdAt,
         ownerId: r.ownerId,
         for: (r.ownerName || '').toLowerCase(),
         mine: r.ownerId === req.user.id,
@@ -167,11 +168,12 @@ app.get('/api/commitments', authMiddleware, async (req,res)=>{
 });
 
 app.post('/api/commitments', authMiddleware, (req,res)=>{
-  const { text, enabled, schedule, scheduleDays, reminderEnabled, reminderTime, weeklyTarget, label, target, achieved, achievedAt } = req.body;
+  const { text, enabled, schedule, scheduleDays, reminderEnabled, reminderTime, weeklyTarget, label, target, achieved, achievedAt, createdAt } = req.body;
   const scheduleDaysJson = scheduleDays ? JSON.stringify(scheduleDays) : null;
-  db.run('INSERT INTO commitments (user_id,text,enabled,doneToday,schedule,scheduleDays,reminderEnabled,reminderTime,weeklyTarget,streak,lastDone,label,target,achieved,achievedAt) VALUES (?,?,?,?,?,?,?,?,?,0,NULL,?,?,?,?)', [req.user.id, text, enabled?1:0, 0, schedule||'daily', scheduleDaysJson, reminderEnabled?1:0, reminderTime||null, weeklyTarget||null, label||null, target||null, achieved?1:0, achievedAt||null], function(err){
+  const createdAtVal = createdAt || localDateKey(new Date());
+  db.run('INSERT INTO commitments (user_id,text,enabled,doneToday,schedule,scheduleDays,reminderEnabled,reminderTime,weeklyTarget,streak,lastDone,label,target,achieved,achievedAt,createdAt) VALUES (?,?,?,?,?,?,?,?,?,0,NULL,?,?,?,?,?)', [req.user.id, text, enabled?1:0, 0, schedule||'daily', scheduleDaysJson, reminderEnabled?1:0, reminderTime||null, weeklyTarget||null, label||null, target||null, achieved?1:0, achievedAt||null, createdAtVal], function(err){
     if(err) return res.status(500).json({ error: 'db' });
-    res.json({ id: this.lastID, text, enabled: !!enabled, doneToday:false, schedule: schedule||'daily', scheduleDays: scheduleDays || null, reminderEnabled: !!reminderEnabled, reminderTime: reminderTime || null, weeklyTarget: weeklyTarget || null, streak:0, lastDone:null, label: label||null, target: target||null, achieved: !!achieved, achievedAt: achievedAt||null });
+    res.json({ id: this.lastID, text, enabled: !!enabled, doneToday:false, schedule: schedule||'daily', scheduleDays: scheduleDays || null, reminderEnabled: !!reminderEnabled, reminderTime: reminderTime || null, weeklyTarget: weeklyTarget || null, streak:0, lastDone:null, label: label||null, target: target||null, achieved: !!achieved, achievedAt: achievedAt||null, createdAt: createdAtVal });
   });
 });
 
@@ -227,10 +229,12 @@ app.put('/api/commitments/:id', authMiddleware, (req,res)=>{
   }
 });
 
-// Return history for a commitment (dates)
+// Return history for a commitment (dates). Not scoped to the requester's own
+// user_id -- like the rest of GET /api/commitments, viewing the other
+// person's history is the point of cross-visibility, not a privacy leak.
 app.get('/api/commitments/:id/history', authMiddleware, (req,res)=>{
   const id = req.params.id;
-  db.all('SELECT date, count FROM completion_log WHERE commitment_id = ? AND user_id = ? ORDER BY date DESC', [id, req.user.id], (err, rows)=>{
+  db.all('SELECT date, count FROM completion_log WHERE commitment_id = ? ORDER BY date DESC', [id], (err, rows)=>{
     if(err) return res.status(500).json({ error: 'db' });
     res.json(rows.map(r=>({ date: r.date, count: r.count || 1 })));
   });

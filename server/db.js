@@ -33,6 +33,7 @@ db.serialize(() => {
     target INTEGER,
     achieved INTEGER DEFAULT 0,
     achievedAt TEXT,
+    createdAt TEXT,
     FOREIGN KEY(user_id) REFERENCES users(id)
   )`);
   
@@ -52,6 +53,7 @@ db.serialize(() => {
     if (!names.includes('target')) db.run('ALTER TABLE commitments ADD COLUMN target INTEGER');
     if (!names.includes('achieved')) db.run('ALTER TABLE commitments ADD COLUMN achieved INTEGER DEFAULT 0');
     if (!names.includes('achievedAt')) db.run('ALTER TABLE commitments ADD COLUMN achievedAt TEXT');
+    if (!names.includes('createdAt')) db.run('ALTER TABLE commitments ADD COLUMN createdAt TEXT');
   });
 
   // Create completion log to store history of completions (date strings YYYY-MM-DD)
