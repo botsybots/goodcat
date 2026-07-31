@@ -255,9 +255,17 @@ app.get('/api/commitments/:id/history', authMiddleware, async (req,res)=>{
 app.delete('/api/commitments/:id', authMiddleware, async (req,res)=>{
   const id = req.params.id;
   try{
+    const owned = await dbGet('SELECT id FROM commitments WHERE id = ? AND user_id = ?', [id, req.user.id]);
+    if(!owned) return res.status(404).json({ error: 'not found' });
+    // @libsql/client enforces foreign keys (sqlite3 didn't), so child rows
+    // have to go first -- there's no ON DELETE CASCADE on these tables.
+    await dbRun('DELETE FROM completion_log WHERE commitment_id = ?', [id]);
+    await dbRun('DELETE FROM paw_log WHERE commitment_id = ?', [id]);
+    await dbRun('DELETE FROM comments WHERE commitment_id = ?', [id]);
     await dbRun('DELETE FROM commitments WHERE id = ? AND user_id = ?', [id, req.user.id]);
     res.json({ success: true });
   }catch(e){
+    console.error('DELETE /api/commitments error', e);
     res.status(500).json({ error: 'db' });
   }
 });
