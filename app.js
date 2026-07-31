@@ -52,6 +52,8 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   const btnSync = document.getElementById('btnSync');
   const btnEnableNotify = document.getElementById('btnEnableNotify');
   const btnExportData = document.getElementById('btnExportData');
+  const btnImportData = document.getElementById('btnImportData');
+  const importFileInput = document.getElementById('importFileInput');
   const notifyStatus = document.getElementById('notifyStatus');
   const livesAnna = document.getElementById('lives-anna');
   const livesJordan = document.getElementById('lives-jordan');
@@ -765,6 +767,35 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     URL.revokeObjectURL(url);
   }
 
+  // Restoring a backup is a deliberate, explicit replace of everything on
+  // this device -- unlike sync (which merges live data), a restore is
+  // supposed to throw away what's here and load the file instead.
+  function importBackup(file){
+    const reader = new FileReader();
+    reader.onload = () => {
+      let parsed;
+      try{ parsed = JSON.parse(reader.result); }
+      catch(e){ alert('That file is not valid backup JSON.'); return; }
+      if(!parsed || !Array.isArray(parsed.commitments) || !Array.isArray(parsed.users)){
+        alert('That file does not look like a Good Cat backup.');
+        return;
+      }
+      if(!confirm('Import this backup? This replaces everything currently on this device.')) return;
+      // Mutate the existing state object in place (rather than reassigning
+      // `state`) so every other reference to it -- including the debug
+      // exposure below -- stays correct after a restore.
+      Object.keys(state).forEach(k => delete state[k]);
+      Object.assign(state, parsed);
+      save(state);
+      renderUsers();
+      renderList();
+      scheduleAllReminders();
+      showToast('Backup imported', 'Your data has been restored.');
+    };
+    reader.onerror = () => alert('Could not read that file.');
+    reader.readAsText(file);
+  }
+
   // Once logged in as "anna" or "jordan", that becomes who you are on this
   // device -- no more manually picking from the dropdown, since the whole
   // point of separate phones is that each one already knows whose it is.
@@ -849,6 +880,12 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   btnLogin.addEventListener('click', login);
   btnLogout.addEventListener('click', ()=>{ setToken(null); setLoginStatus('Logged out'); alert('logged out'); });
   btnExportData.addEventListener('click', exportBackup);
+  btnImportData.addEventListener('click', () => importFileInput.click());
+  importFileInput.addEventListener('change', () => {
+    const file = importFileInput.files[0];
+    if(file) importBackup(file);
+    importFileInput.value = '';
+  });
 
   // Non-destructive sync: merges the server's view into local state instead
   // of replacing it. Runs on login, every 20s while logged in, after local
