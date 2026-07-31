@@ -30,6 +30,34 @@ npm start
 
 By default the backend listens on port 3000. Set the API base in the app's UI to `http://localhost:3000`.
 
+Deploying for real (frontend + synced backend)
+
+This app is live at https://botsybots.github.io/goodcat/, built from this
+repo's `main` branch via GitHub Pages (Settings -> Pages -> Deploy from a
+branch -> `main` / root). Add it to your phone's home screen from that URL
+to install it as an app.
+
+For paws/comments/reminders to sync between two phones, the `server/`
+backend needs to be hosted somewhere reachable over HTTPS (not just
+`localhost`):
+
+1. **Database**: create a free database at [turso.tech](https://turso.tech)
+   (no credit card, 5GB free, never expires) and grab its `libsql://...`
+   URL and an auth token.
+2. **Server**: deploy `server/` to [Render](https://render.com)'s free web
+   service tier using the `render.yaml` blueprint at the repo root ("New +"
+   -> "Blueprint" -> select this repo). Fill in `TURSO_DATABASE_URL`,
+   `TURSO_AUTH_TOKEN`, `VAPID_PUBLIC`, and `VAPID_PRIVATE` when prompted;
+   `JWT_SECRET` is generated for you automatically.
+3. **Keep it awake**: Render's free tier spins down after ~15 minutes idle,
+   which would also stop it noticing due reminders. Set the `RENDER_APP_URL`
+   repository variable (Settings -> Secrets and variables -> Actions ->
+   Variables) to your deployed Render URL -- `.github/workflows/keep-alive.yml`
+   pings it every 10 minutes for free (GitHub Actions is unlimited for
+   public repos).
+4. In the app's Settings panel, set **API base** to your Render URL on each
+   phone, then register/log in as `anna` or `jordan`.
+
 Running tests
 
 The streak/schedule calculations have a small dependency-free test script:
