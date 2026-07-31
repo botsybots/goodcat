@@ -44,6 +44,7 @@ async function migrate() {
   if (!userCols.includes('lastEndOfDaySent')) await dbRun('ALTER TABLE users ADD COLUMN lastEndOfDaySent TEXT');
   if (!userCols.includes('lastWeeklyCategoryCheck')) await dbRun('ALTER TABLE users ADD COLUMN lastWeeklyCategoryCheck TEXT');
   if (!userCols.includes('xp')) await dbRun('ALTER TABLE users ADD COLUMN xp INTEGER DEFAULT 0');
+  if (!userCols.includes('lastProgressReset')) await dbRun('ALTER TABLE users ADD COLUMN lastProgressReset TEXT');
 
   await dbRun(`CREATE TABLE IF NOT EXISTS commitments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

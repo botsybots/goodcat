@@ -453,12 +453,23 @@ app.post('/api/suggestions/:id/reject', authMiddleware, async (req,res)=>{
 });
 
 // Self-service progress reset -- for trying the app out and wanting a clean
-// slate. Only ever touches the caller's own commitments/XP: zeroes streak,
-// achieved status, and completion history, and resets XP to 0. Leaves the
-// commitments themselves (so nothing has to be re-created), and leaves
-// paws/comments (those are the other person's messages, not "progress").
+// slate, NOT an escape hatch from ordinary missed habits, so it's capped to
+// once every 30 days per person. Only ever touches the caller's own
+// commitments/XP: zeroes streak, achieved status, and completion history,
+// and resets XP to 0. Leaves the commitments themselves (so nothing has to
+// be re-created), and leaves paws/comments (those are the other person's
+// messages, not "progress").
+const RESET_COOLDOWN_DAYS = 30;
 app.post('/api/me/reset', authMiddleware, async (req,res)=>{
   try{
+    const row = await dbGet('SELECT lastProgressReset FROM users WHERE id = ?', [req.user.id]);
+    if(row && row.lastProgressReset){
+      const daysSince = (Date.now() - new Date(row.lastProgressReset).getTime()) / (1000*60*60*24);
+      if(daysSince < RESET_COOLDOWN_DAYS){
+        const daysLeft = Math.ceil(RESET_COOLDOWN_DAYS - daysSince);
+        return res.status(429).json({ error: `You can only reset your progress once every ${RESET_COOLDOWN_DAYS} days. Try again in ${daysLeft} day${daysLeft===1?'':'s'}.` });
+      }
+    }
     const commits = await dbAll('SELECT id FROM commitments WHERE user_id = ?', [req.user.id]);
     for(const c of commits){
       await dbRun('DELETE FROM completion_log WHERE commitment_id = ?', [c.id]);
@@ -467,7 +478,7 @@ app.post('/api/me/reset', authMiddleware, async (req,res)=>{
       'UPDATE commitments SET streak = 0, doneToday = 0, lastDone = NULL, achieved = 0, achievedAt = NULL, lastReminderSent = NULL WHERE user_id = ?',
       [req.user.id]
     );
-    await dbRun('UPDATE users SET xp = 0 WHERE id = ?', [req.user.id]);
+    await dbRun('UPDATE users SET xp = 0, lastProgressReset = ? WHERE id = ?', [new Date().toISOString(), req.user.id]);
     res.json({ success: true });
   }catch(e){
     console.error('POST /api/me/reset error', e);

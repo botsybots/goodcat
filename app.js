@@ -1563,10 +1563,14 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   if(btnResetProgress){
     btnResetProgress.addEventListener('click', async ()=>{
       if(!authToken) return alert('Login first.');
-      if(!confirm(`Reset ${userName(currentUser)}'s progress? This sets lives back to 9/9 and streaks/XP back to zero. Commitments stay, but this can't be undone.`)) return;
+      if(!confirm(`Reset ${userName(currentUser)}'s progress? This sets lives back to 9/9 and streaks/XP back to zero. Commitments stay, but this can't be undone. Limited to once every 30 days.`)) return;
       try{
         const res = await fetch(apiBase() + '/api/me/reset', { method:'POST', headers:{ authorization:'Bearer '+authToken } });
-        if(!res.ok){ showToast('Something went wrong', 'Could not reset your progress.'); return; }
+        if(!res.ok){
+          const j = await res.json().catch(()=>null);
+          showToast('Not this time', (j && j.error) || 'Could not reset your progress.');
+          return;
+        }
       }catch(e){
         showToast('Offline?', 'Could not reach the server.');
         return;
@@ -1593,7 +1597,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
       state.usersXp[currentUser] = 0;
       save(state);
       renderList();
-      settingsPanel.classList.add('hidden');
+      toggleDebugPanel(false);
       showToast('Reset complete', `${userName(currentUser)} is back to 9/9 lives and 0 XP.`);
       runSync();
     });
