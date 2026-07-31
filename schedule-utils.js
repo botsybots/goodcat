@@ -1,4 +1,4 @@
-import { getDayKey, localDateKey, weekStartDate } from './date-utils.js';
+import { getDayKey, localDateKey, parseLocalDate, weekStartDate } from './date-utils.js';
 
 const weekScheduleMap = {
   twice: ['mon', 'thu'],
@@ -32,4 +32,29 @@ export function countCompletionsThisWeek(commit, refDate){
   const start = localDateKey(weekStartDate(refDate));
   const end = localDateKey(new Date(weekStartDate(refDate).getTime() + 7 * 24 * 60 * 60 * 1000));
   return (commit.history||[]).filter(d => d >= start && d < end && isScheduledDay(commit, d)).length;
+}
+
+// Single source of truth for streak calculation, used by both the client
+// (app.js, against in-memory history) and the server (against completion_log
+// rows), so the two never disagree about what counts as a current streak.
+export function computeStreak(commit, historyDates, asOfIso){
+  if(!commit) return 0;
+  const history = new Set(historyDates || []);
+  const cursor = parseLocalDate(asOfIso);
+  if(!cursor) return 0;
+  let streak = 0;
+  while(true){
+    const cursorIso = localDateKey(cursor);
+    if(!isScheduledDay(commit, cursorIso)){
+      cursor.setDate(cursor.getDate() - 1);
+      continue;
+    }
+    if(history.has(cursorIso)){
+      streak += 1;
+      cursor.setDate(cursor.getDate() - 1);
+    } else {
+      break;
+    }
+  }
+  return streak;
 }

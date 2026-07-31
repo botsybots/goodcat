@@ -1,10 +1,12 @@
-require('dotenv').config();
-const express = require('express');
-const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
-const cors = require('cors');
-const db = require('./db');
-const webpush = require('web-push');
+import 'dotenv/config';
+import express from 'express';
+import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
+import cors from 'cors';
+import webpush from 'web-push';
+import db from './db.js';
+import { isScheduledDay, computeStreak } from '../schedule-utils.js';
+import { localDateKey } from '../date-utils.js';
 
 const app = express();
 app.use(cors());
@@ -120,29 +122,45 @@ app.put('/api/commitments/:id', authMiddleware, (req,res)=>{
   const id = req.params.id;
   const { text, enabled, doneToday, schedule, scheduleDays, reminderEnabled, reminderTime, weeklyTarget, label, target } = req.body;
   const scheduleDaysJson = scheduleDays ? JSON.stringify(scheduleDays) : null;
-  // If marking doneToday, compute streak and lastDone server-side
+  // If marking doneToday, recompute streak from the full completion_log history
+  // using the same computeStreak() the client uses, so the two never disagree.
   if (doneToday !== undefined) {
-    db.get('SELECT streak, lastDone, target, achieved FROM commitments WHERE id = ? AND user_id = ?', [id, req.user.id], (err,row)=>{
+    db.get('SELECT schedule, scheduleDays, target, achieved, achievedAt FROM commitments WHERE id = ? AND user_id = ?', [id, req.user.id], (err,row)=>{
       if(err || !row) return res.status(500).json({ error: 'db' });
-      const today = new Date().toISOString().slice(0,10);
-      let newStreak = row.streak || 0;
-      let newLast = row.lastDone;
-      let achieved = !!row.achieved;
-      let achievedAt = null;
-      if (doneToday) {
-        const yesterday = new Date(Date.now() - 24*60*60*1000).toISOString().slice(0,10);
-        if (row.lastDone === yesterday) newStreak = (row.streak||0) + 1; else newStreak = 1;
-        newLast = today;
-        if (row.target && newStreak >= row.target && !achieved) { achieved = true; achievedAt = today; }
-      }
-      db.run('UPDATE commitments SET text = ?, enabled = ?, doneToday = ?, schedule = ?, scheduleDays = ?, reminderEnabled = ?, reminderTime = ?, weeklyTarget = ?, streak = ?, lastDone = ?, label = ?, target = ?, achieved = COALESCE(?, achieved), achievedAt = COALESCE(?, achievedAt) WHERE id = ? AND user_id = ?', [text, enabled?1:0, doneToday?1:0, schedule||null, scheduleDaysJson, reminderEnabled?1:0, reminderTime||null, weeklyTarget||null, newStreak, newLast, label||null, target||null, achieved?1:null, achievedAt, id, req.user.id], function(err2){
-        if(err2) return res.status(500).json({ error: 'db' });
+      const today = localDateKey(new Date());
+      const effectiveScheduleDays = scheduleDays !== undefined ? scheduleDays : (row.scheduleDays ? JSON.parse(row.scheduleDays) : null);
+      const effectiveScheduleDaysJson = effectiveScheduleDays ? JSON.stringify(effectiveScheduleDays) : null;
+      const commitForStreak = { schedule: schedule || row.schedule, scheduleDays: effectiveScheduleDays };
+
+      const applyCompletionLog = (cb) => {
         if (doneToday) {
-          db.run('INSERT INTO completion_log (commitment_id, user_id, date, count) VALUES (?,?,?,1) ON CONFLICT(commitment_id, date) DO UPDATE SET count = count + 1', [id, req.user.id, newLast], (e)=>{
-            if (e) console.error('log insert err', e);
-          });
+          db.run('INSERT INTO completion_log (commitment_id, user_id, date, count) VALUES (?,?,?,1) ON CONFLICT(commitment_id, date) DO UPDATE SET count = count + 1', [id, req.user.id, today], cb);
+        } else {
+          db.run('DELETE FROM completion_log WHERE commitment_id = ? AND user_id = ? AND date = ?', [id, req.user.id, today], cb);
         }
-        res.json({ success:true, streak:newStreak, lastDone:newLast, achieved, achievedAt });
+      };
+
+      applyCompletionLog((logErr) => {
+        if (logErr) console.error('log update err', logErr);
+        db.all('SELECT date FROM completion_log WHERE commitment_id = ? AND user_id = ?', [id, req.user.id], (histErr, historyRows) => {
+          if (histErr) return res.status(500).json({ error: 'db' });
+          const historyDates = historyRows.map(r => r.date);
+          const newStreak = computeStreak(commitForStreak, historyDates, today);
+          const newLast = historyDates.length ? historyDates.reduce((a, b) => (a > b ? a : b)) : null;
+          const targetVal = target !== undefined ? target : row.target;
+          let achieved = !!row.achieved;
+          let achievedAt = row.achievedAt || null;
+          if (targetVal && newStreak >= targetVal) {
+            if (!achieved) { achieved = true; achievedAt = today; }
+          } else if (targetVal) {
+            achieved = false;
+            achievedAt = null;
+          }
+          db.run('UPDATE commitments SET text = ?, enabled = ?, doneToday = ?, schedule = ?, scheduleDays = ?, reminderEnabled = ?, reminderTime = ?, weeklyTarget = ?, streak = ?, lastDone = ?, label = ?, target = ?, achieved = ?, achievedAt = ? WHERE id = ? AND user_id = ?', [text, enabled?1:0, doneToday?1:0, schedule||row.schedule||null, effectiveScheduleDaysJson, reminderEnabled?1:0, reminderTime||null, weeklyTarget||null, newStreak, newLast, label||null, targetVal||null, achieved?1:0, achievedAt, id, req.user.id], function(err2){
+            if(err2) return res.status(500).json({ error: 'db' });
+            res.json({ success:true, streak:newStreak, lastDone:newLast, achieved, achievedAt });
+          });
+        });
       });
     });
   } else {
@@ -169,25 +187,11 @@ app.delete('/api/commitments/:id', authMiddleware, (req,res)=>{
   });
 });
 
-function getDayKey(date){
-  const days = ['sun','mon','tue','wed','thu','fri','sat'];
-  return days[date.getDay()];
-}
-
-function isScheduledForDate(commit, date){
-  if(commit.schedule === 'daily') return true;
-  const dayKey = getDayKey(date);
-  if(commit.schedule === 'weekdays') return ['mon','tue','wed','thu','fri'].includes(dayKey);
-  if(commit.schedule === 'custom' && Array.isArray(commit.scheduleDays) && commit.scheduleDays.length) return commit.scheduleDays.includes(dayKey);
-  if(['twice','three','four'].includes(commit.schedule)) return ['mon','tue','wed','thu','fri'].includes(dayKey);
-  return true;
-}
-
 function shouldSendReminder(commit, now){
   if(!commit.reminderEnabled || !commit.reminderTime || !commit.enabled) return false;
-  const todayKey = now.toISOString().slice(0,10);
+  const todayKey = localDateKey(now);
   if(commit.lastReminderSent === todayKey) return false;
-  if(!isScheduledForDate(commit, now)) return false;
+  if(!isScheduledDay(commit, todayKey)) return false;
   const [hh, mm] = commit.reminderTime.split(':').map(Number);
   return now.getHours() === hh && now.getMinutes() === mm;
 }
@@ -211,7 +215,7 @@ function checkDueReminders(){
         if(err2 || !rows || !rows.length) return;
         const payload = JSON.stringify({ title: 'Good Cat Reminder', body: `Time for: ${commit.text}`, tag: `reminder-${commit.id}` });
         sendPushToSubscriptions(rows, payload).then(results=>{
-          db.run('UPDATE commitments SET lastReminderSent = ? WHERE id = ?', [now.toISOString().slice(0,10), commit.id], ()=>{});
+          db.run('UPDATE commitments SET lastReminderSent = ? WHERE id = ?', [localDateKey(now), commit.id], ()=>{});
         });
       });
     });

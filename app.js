@@ -1,5 +1,5 @@
 import { localDateKey, todayLocalDate, parseLocalDate, normalizeDate, nextLocalDate, prevLocalDate, getDayKey, weekStartDate } from './date-utils.js';
-import { isScheduledDay, getScheduleDescription, countCompletionsThisWeek } from './schedule-utils.js';
+import { isScheduledDay, getScheduleDescription, countCompletionsThisWeek, computeStreak } from './schedule-utils.js';
 
 // Simple Accountability App (localStorage-backed)
 (function(){
@@ -121,52 +121,11 @@ import { isScheduledDay, getScheduleDescription, countCompletionsThisWeek } from
     setTimeout(()=>{ t.style.opacity='0'; setTimeout(()=>t.remove(),400); },7000);
   }
 
-  function localDateKey(date){
-    const d = date instanceof Date ? date : new Date(date);
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  }
-
-  function todayLocalDate(){
-    return localDateKey(new Date());
-  }
-
   function showSystemNotification(title, body){
     if(typeof Notification === 'undefined') return showToast(title, body);
     if(Notification.permission === 'granted'){
       try{ new Notification(title, { body }); }catch(e){ showToast(title, body); }
     } else showToast(title, body);
-  }
-
-  function normalizeDate(date){
-    if(!date) return null;
-    return localDateKey(date);
-  }
-
-  function parseLocalDate(date){
-    if(!date) return null;
-    if(date instanceof Date) return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-    const parts = String(date).split('-').map(Number);
-    if(parts.length === 3){
-      return new Date(parts[0], parts[1] - 1, parts[2]);
-    }
-    return new Date(date);
-  }
-
-  function nextLocalDate(date){
-    const d = parseLocalDate(date);
-    if(!d) return null;
-    d.setDate(d.getDate() + 1);
-    return localDateKey(d);
-  }
-
-  function prevLocalDate(date){
-    const d = parseLocalDate(date);
-    if(!d) return null;
-    d.setDate(d.getDate() - 1);
-    return localDateKey(d);
   }
 
   function userName(id){
@@ -182,24 +141,7 @@ import { isScheduledDay, getScheduleDescription, countCompletionsThisWeek } from
 
   function rebuildStreak(commit){
     if(!commit || !commit.history) return 0;
-    const today = localDateKey(new Date());
-    let streak = 0;
-    let cursor = new Date();
-    cursor.setHours(0,0,0,0);
-    while(true){
-      const cursorIso = localDateKey(cursor);
-      if(!isScheduledDay(commit, cursorIso)){
-        cursor.setDate(cursor.getDate() - 1);
-        continue;
-      }
-      if(commit.history.includes(cursorIso)){
-        streak += 1;
-        cursor.setDate(cursor.getDate() - 1);
-      } else {
-        break;
-      }
-    }
-    return streak;
+    return computeStreak(commit, commit.history, todayLocalDate());
   }
 
   function updateCommitStatusFromHistory(commit){
@@ -324,22 +266,6 @@ import { isScheduledDay, getScheduleDescription, countCompletionsThisWeek } from
     if(livesJordan) livesJordan.textContent = `${state.lives.jordan} / ${MAX_LIVES}`;
     if(councilAnna) councilAnna.classList.toggle('hidden', !(state.lives.anna <= 0));
     if(councilJordan) councilJordan.classList.toggle('hidden', !(state.lives.jordan <= 0));
-  }
-
-  function maybeResetCouncil(){
-    if(state.lifeCouncilAck.anna && state.lifeCouncilAck.jordan){
-      processCouncilAcknowledgement('anna');
-    }
-  }
-
-  // Weekly scheduling helpers for N-times-per-week commitments
-  function weekStartDate(d){
-    const date = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-    const day = date.getDay(); // 0 (Sun) - 6
-    const diff = (day + 6) % 7; // days since Monday
-    date.setDate(date.getDate() - diff);
-    date.setHours(0,0,0,0);
-    return date;
   }
 
   function findNextReminderDateForWeekly(commit, nowDate){
