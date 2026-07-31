@@ -30,6 +30,14 @@ npm start
 
 By default the backend listens on port 3000. Set the API base in the app's UI to `http://localhost:3000`.
 
+Running tests
+
+The streak/schedule calculations have a small dependency-free test script:
+
+```bash
+node tests/schedule.test.mjs
+```
+
 Preparing for GitHub
 
 1. Create a new repository on GitHub.
