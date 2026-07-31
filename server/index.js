@@ -4,6 +4,7 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import cors from 'cors';
 import webpush from 'web-push';
+import { promisify } from 'util';
 import db from './db.js';
 import { isScheduledDay, computeStreak } from '../schedule-utils.js';
 import { localDateKey } from '../date-utils.js';
@@ -11,6 +12,14 @@ import { localDateKey } from '../date-utils.js';
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+const dbAll = promisify(db.all.bind(db));
+const dbGet = promisify(db.get.bind(db));
+function dbRun(sql, params){
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function(err){ if(err) reject(err); else resolve(this); });
+  });
+}
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 
@@ -102,11 +111,59 @@ app.post('/api/login', (req,res)=>{
   });
 });
 
-app.get('/api/commitments', authMiddleware, (req,res)=>{
-  db.all('SELECT id, text, enabled, doneToday, schedule, scheduleDays, reminderEnabled, reminderTime, weeklyTarget, streak, lastDone, label, target, achieved, achievedAt FROM commitments WHERE user_id = ?', [req.user.id], (err,rows)=>{
-     if(err) return res.status(500).json({ error: 'db' });
-     res.json(rows.map(r=>({ id:r.id, text:r.text, enabled:!!r.enabled, doneToday:!!r.doneToday, schedule: r.schedule || 'daily', scheduleDays: r.scheduleDays ? JSON.parse(r.scheduleDays) : null, reminderEnabled: !!r.reminderEnabled, reminderTime: r.reminderTime || null, weeklyTarget: r.weeklyTarget || null, streak: r.streak || 0, lastDone: r.lastDone, label: r.label || null, target: r.target || null, achieved: !!r.achieved, achievedAt: r.achievedAt })));
-  });
+// Returns commitments for BOTH people, not just the caller's own -- this is a
+// two-person shared app, and the whole point of paws/comments is that each
+// person can see and react to the other's habits. Editing stays restricted
+// to your own (enforced on the POST/PUT/DELETE routes below).
+app.get('/api/commitments', authMiddleware, async (req,res)=>{
+  try{
+    const rows = await dbAll(`
+      SELECT c.id, c.text, c.enabled, c.doneToday, c.schedule, c.scheduleDays,
+             c.reminderEnabled, c.reminderTime, c.weeklyTarget, c.streak, c.lastDone,
+             c.label, c.target, c.achieved, c.achievedAt, c.user_id as ownerId, u.name as ownerName
+      FROM commitments c
+      JOIN users u ON u.id = c.user_id
+    `);
+
+    const result = await Promise.all(rows.map(async r => {
+      const [pawCountRow, lastPaw, lastComment] = await Promise.all([
+        dbGet('SELECT COUNT(*) as count FROM paw_log WHERE commitment_id = ?', [r.id]),
+        dbGet(`SELECT p.date, u.name as byName FROM paw_log p JOIN users u ON u.id = p.giver_user_id
+               WHERE p.commitment_id = ? ORDER BY p.date DESC LIMIT 1`, [r.id]),
+        dbGet(`SELECT cm.text, cm.created_at as createdAt, u.name as byName FROM comments cm
+               JOIN users u ON u.id = cm.user_id
+               WHERE cm.commitment_id = ? ORDER BY cm.created_at DESC LIMIT 1`, [r.id])
+      ]);
+      return {
+        id: r.id,
+        text: r.text,
+        enabled: !!r.enabled,
+        doneToday: !!r.doneToday,
+        schedule: r.schedule || 'daily',
+        scheduleDays: r.scheduleDays ? JSON.parse(r.scheduleDays) : null,
+        reminderEnabled: !!r.reminderEnabled,
+        reminderTime: r.reminderTime || null,
+        weeklyTarget: r.weeklyTarget || null,
+        streak: r.streak || 0,
+        lastDone: r.lastDone,
+        label: r.label || null,
+        target: r.target || null,
+        achieved: !!r.achieved,
+        achievedAt: r.achievedAt,
+        ownerId: r.ownerId,
+        for: (r.ownerName || '').toLowerCase(),
+        mine: r.ownerId === req.user.id,
+        pawCount: pawCountRow ? pawCountRow.count : 0,
+        lastPaw: lastPaw ? { date: lastPaw.date, by: lastPaw.byName } : null,
+        lastComment: lastComment ? { text: lastComment.text, by: lastComment.byName, at: lastComment.createdAt } : null
+      };
+    }));
+
+    res.json(result);
+  }catch(e){
+    console.error('GET /api/commitments error', e);
+    res.status(500).json({ error: 'db' });
+  }
 });
 
 app.post('/api/commitments', authMiddleware, (req,res)=>{
@@ -185,6 +242,63 @@ app.delete('/api/commitments/:id', authMiddleware, (req,res)=>{
     if(err) return res.status(500).json({ error: 'db' });
     res.json({ success: true });
   });
+});
+
+// Give a paw to someone else's habit. Capped at one per commitment per day by
+// the paw_log UNIQUE(commitment_id, date) constraint -- a second attempt the
+// same day is treated as a harmless no-op rather than an error.
+app.post('/api/commitments/:id/paws', authMiddleware, async (req,res)=>{
+  const id = req.params.id;
+  try{
+    const commit = await dbGet('SELECT id, user_id FROM commitments WHERE id = ?', [id]);
+    if(!commit) return res.status(404).json({ error: 'not found' });
+    if(commit.user_id === req.user.id) return res.status(403).json({ error: "can't paw your own habit" });
+
+    const today = localDateKey(new Date());
+    try{
+      await dbRun('INSERT INTO paw_log (commitment_id, giver_user_id, date) VALUES (?,?,?)', [id, req.user.id, today]);
+    }catch(e){
+      // UNIQUE(commitment_id, date) violation -- already pawed today.
+    }
+
+    const pawCountRow = await dbGet('SELECT COUNT(*) as count FROM paw_log WHERE commitment_id = ?', [id]);
+    const lastPaw = await dbGet(`SELECT p.date, u.name as byName FROM paw_log p JOIN users u ON u.id = p.giver_user_id
+           WHERE p.commitment_id = ? ORDER BY p.date DESC LIMIT 1`, [id]);
+    res.json({ pawCount: pawCountRow.count, lastPaw: lastPaw ? { date: lastPaw.date, by: lastPaw.byName } : null });
+  }catch(e){
+    console.error('paw error', e);
+    res.status(500).json({ error: 'db' });
+  }
+});
+
+// Add an encouragement note to a commitment (either person may comment).
+app.post('/api/commitments/:id/comments', authMiddleware, async (req,res)=>{
+  const id = req.params.id;
+  const text = ((req.body && req.body.text) || '').trim();
+  if(!text) return res.status(400).json({ error: 'text required' });
+  try{
+    const commit = await dbGet('SELECT id FROM commitments WHERE id = ?', [id]);
+    if(!commit) return res.status(404).json({ error: 'not found' });
+    await dbRun('INSERT INTO comments (commitment_id, user_id, text, created_at) VALUES (?,?,?,?)', [id, req.user.id, text, new Date().toISOString()]);
+    const lastComment = await dbGet(`SELECT cm.text, cm.created_at as createdAt, u.name as byName FROM comments cm
+           JOIN users u ON u.id = cm.user_id WHERE cm.commitment_id = ? ORDER BY cm.created_at DESC LIMIT 1`, [id]);
+    res.json({ lastComment: lastComment ? { text: lastComment.text, by: lastComment.byName, at: lastComment.createdAt } : null });
+  }catch(e){
+    console.error('comment error', e);
+    res.status(500).json({ error: 'db' });
+  }
+});
+
+// Full comment thread for a commitment.
+app.get('/api/commitments/:id/comments', authMiddleware, async (req,res)=>{
+  const id = req.params.id;
+  try{
+    const rows = await dbAll(`SELECT cm.text, cm.created_at as createdAt, u.name as byName FROM comments cm
+           JOIN users u ON u.id = cm.user_id WHERE cm.commitment_id = ? ORDER BY cm.created_at DESC`, [id]);
+    res.json(rows.map(r => ({ text: r.text, by: r.byName, at: r.createdAt })));
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
 });
 
 function shouldSendReminder(commit, now){

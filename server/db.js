@@ -74,13 +74,36 @@ db.serialize(() => {
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(user_id) REFERENCES users(id)
   )`);
-  
+
   // Ensure 'count' column exists for older DBs
   db.all("PRAGMA table_info(completion_log)", (err, cols) => {
     if (err) return;
     const names = cols.map(c => c.name);
     if (!names.includes('count')) db.run('ALTER TABLE completion_log ADD COLUMN count INTEGER DEFAULT 1');
   });
+
+  // One paw per commitment per day, from whoever isn't the owner (enforced in
+  // index.js) -- the UNIQUE constraint is what actually caps it at one/day.
+  db.run(`CREATE TABLE IF NOT EXISTS paw_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    commitment_id INTEGER,
+    giver_user_id INTEGER,
+    date TEXT,
+    UNIQUE(commitment_id, date),
+    FOREIGN KEY(commitment_id) REFERENCES commitments(id),
+    FOREIGN KEY(giver_user_id) REFERENCES users(id)
+  )`);
+
+  // Encouragement notes left on a commitment by either person.
+  db.run(`CREATE TABLE IF NOT EXISTS comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    commitment_id INTEGER,
+    user_id INTEGER,
+    text TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(commitment_id) REFERENCES commitments(id),
+    FOREIGN KEY(user_id) REFERENCES users(id)
+  )`);
 });
 
 export default db;
