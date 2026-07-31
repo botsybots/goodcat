@@ -10,6 +10,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
 
   const STORAGE_KEY = 'accountability:data:v1';
   const DEFAULT_API_BASE = 'https://goodcat-api.onrender.com';
+  const LABEL_ICONS = { Health: '🩺', Fitness: '💪', Education: '📚', Cleanliness: '🧹', Relationship: '💞' };
 
   function load(){
     try{
@@ -41,6 +42,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   const commitListJordan = document.getElementById('commitList-jordan');
   const commitLabel = document.getElementById('commitLabel');
   const commitTarget = document.getElementById('commitTarget');
+  const commitStartDate = document.getElementById('commitStartDate');
   const commitReminderEnabled = document.getElementById('commitReminderEnabled');
   const commitReminderTime = document.getElementById('commitReminderTime');
   const apiBaseInput = document.getElementById('apiBase');
@@ -636,7 +638,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
       // control. Not owned -> purely decorative, nothing to operate here.
       const icon = document.createElement(owned ? 'button' : 'div');
       icon.className = 'card-status-icon';
-      icon.textContent = c.achieved ? '🏆' : c.doneToday ? '✅' : '📌';
+      icon.textContent = c.achieved ? '🏆' : c.doneToday ? '✅' : (LABEL_ICONS[c.label] || '📌');
       if(owned){
         icon.type = 'button';
         icon.setAttribute('aria-pressed', c.doneToday ? 'true' : 'false');
@@ -647,9 +649,11 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
       }
 
       const body = document.createElement('div'); body.className='card-body';
+      const notStartedYet = c.createdAt && c.createdAt > appToday();
       const badgesHtml = [
         !c.enabled ? '<span class="paused-badge">Paused</span>' : '',
-        c.label ? `<span class="label-badge">${escapeHtml(c.label)}</span>` : '',
+        notStartedYet ? `<span class="paused-badge">Starts ${escapeHtml(c.createdAt)}</span>` : '',
+        c.label ? `<span class="label-badge">${LABEL_ICONS[c.label] || ''} ${escapeHtml(c.label)}</span>` : '',
         c.achieved ? '<span class="achieved-badge">Achieved</span>' : ''
       ].filter(Boolean).join(' ');
       body.innerHTML = `
@@ -729,6 +733,20 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
         const editBtn = document.createElement('button'); editBtn.type='button'; editBtn.className='menu-item'; editBtn.textContent = '✏️ Edit';
         editBtn.addEventListener('click', ()=>{ closeAllCardMenus(); openEditCommit(c); });
         menu.appendChild(editBtn);
+
+        // Pausing keeps the commitment and its history, it just stops it
+        // counting toward streaks/lives and marks it "Paused" until resumed --
+        // the quick way to do that without opening the full edit form.
+        const pauseBtn = document.createElement('button'); pauseBtn.type='button'; pauseBtn.className='menu-item';
+        pauseBtn.textContent = c.enabled ? '⏸ Pause' : '▶️ Resume';
+        pauseBtn.addEventListener('click', ()=>{
+          closeAllCardMenus();
+          c.enabled = !c.enabled;
+          save(state);
+          pushCommitmentToServer(c);
+          renderList();
+        });
+        menu.appendChild(pauseBtn);
 
         const reminderRow = document.createElement('div'); reminderRow.className = 'menu-item menu-reminder';
         const reminderToggle = document.createElement('label'); reminderToggle.className = 'toggle-switch small';
@@ -942,6 +960,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     }
     commitLabel.value = commit.label || '';
     commitTarget.value = commit.target || '';
+    commitStartDate.value = commit.createdAt || '';
     commitReminderEnabled.checked = !!commit.reminderEnabled;
     commitReminderTime.value = commit.reminderTime || '';
     commitEnabled.checked = !!commit.enabled;
@@ -1135,6 +1154,8 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     document.querySelectorAll('#customDays input[name="commitDay"]').forEach(input=>input.checked=false);
     commitLabel.value = '';
     commitTarget.value = '';
+    commitStartDate.value = '';
+    commitStartDate.min = appToday();
     commitReminderEnabled.checked = false;
     commitReminderTime.value = '';
     commitEnabled.checked = true;
@@ -1236,6 +1257,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     }
     const label = commitLabel ? (commitLabel.value.trim() || null) : null;
     const target = commitTarget ? (commitTarget.value ? parseInt(commitTarget.value,10) : null) : null;
+    const startDate = commitStartDate && commitStartDate.value ? commitStartDate.value : null;
     const reminderEnabled = commitReminderEnabled ? !!commitReminderEnabled.checked : false;
     const reminderTime = commitReminderTime ? (commitReminderTime.value || null) : null;
     const weeklyTarget = schedule === 'twice' ? 2 : (schedule === 'three' ? 3 : (schedule === 'four' ? 4 : null));
@@ -1251,6 +1273,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
         commitItem.scheduleDays = scheduleDays;
         commitItem.label = label;
         commitItem.target = target;
+        commitItem.createdAt = startDate || commitItem.createdAt;
         commitItem.reminderEnabled = reminderEnabled;
         commitItem.reminderTime = reminderTime;
         commitItem.weeklyTarget = weeklyTarget;
@@ -1258,7 +1281,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
         scheduleReminderFor(commitItem);
       }
     } else {
-      commitItem = { id: uid(), text, for: forUser, enabled, doneToday:false, schedule, scheduleDays, streak:0, lastDone:null, remoteId:null, history: [], label, target, reminderEnabled, reminderTime, paws:0, comments: [], weeklyTarget, createdAt: appToday() };
+      commitItem = { id: uid(), text, for: forUser, enabled, doneToday:false, schedule, scheduleDays, streak:0, lastDone:null, remoteId:null, history: [], label, target, reminderEnabled, reminderTime, paws:0, comments: [], weeklyTarget, createdAt: startDate || appToday() };
       state.commitments.push(commitItem);
       scheduleReminderFor(commitItem);
     }
@@ -1268,6 +1291,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     commitText.value='';
     if(commitLabel) commitLabel.value='';
     if(commitTarget) commitTarget.value='';
+    if(commitStartDate) commitStartDate.value='';
     if(commitReminderEnabled) commitReminderEnabled.checked = false;
     if(commitReminderTime) commitReminderTime.value = '';
     document.querySelectorAll('#customDays input[name="commitDay"]').forEach(input=>input.checked=false);

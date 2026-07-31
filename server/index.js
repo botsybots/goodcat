@@ -188,7 +188,7 @@ app.post('/api/commitments', authMiddleware, async (req,res)=>{
 
 app.put('/api/commitments/:id', authMiddleware, async (req,res)=>{
   const id = req.params.id;
-  const { text, enabled, doneToday, schedule, scheduleDays, reminderEnabled, reminderTime, weeklyTarget, label, target } = req.body;
+  const { text, enabled, doneToday, schedule, scheduleDays, reminderEnabled, reminderTime, weeklyTarget, label, target, createdAt } = req.body;
   const scheduleDaysJson = scheduleDays ? JSON.stringify(scheduleDays) : null;
   try{
     // If marking doneToday, recompute streak from the full completion_log
@@ -222,14 +222,14 @@ app.put('/api/commitments/:id', authMiddleware, async (req,res)=>{
         achievedAt = null;
       }
       await dbRun(
-        'UPDATE commitments SET text = ?, enabled = ?, doneToday = ?, schedule = ?, scheduleDays = ?, reminderEnabled = ?, reminderTime = ?, weeklyTarget = ?, streak = ?, lastDone = ?, label = ?, target = ?, achieved = ?, achievedAt = ? WHERE id = ? AND user_id = ?',
-        [text, enabled?1:0, doneToday?1:0, schedule||row.schedule||null, effectiveScheduleDaysJson, reminderEnabled?1:0, reminderTime||null, weeklyTarget||null, newStreak, newLast, label||null, targetVal||null, achieved?1:0, achievedAt, id, req.user.id]
+        'UPDATE commitments SET text = ?, enabled = ?, doneToday = ?, schedule = ?, scheduleDays = ?, reminderEnabled = ?, reminderTime = ?, weeklyTarget = ?, streak = ?, lastDone = ?, label = ?, target = ?, achieved = ?, achievedAt = ?, createdAt = COALESCE(?, createdAt) WHERE id = ? AND user_id = ?',
+        [text, enabled?1:0, doneToday?1:0, schedule||row.schedule||null, effectiveScheduleDaysJson, reminderEnabled?1:0, reminderTime||null, weeklyTarget||null, newStreak, newLast, label||null, targetVal||null, achieved?1:0, achievedAt, createdAt||null, id, req.user.id]
       );
       res.json({ success:true, streak:newStreak, lastDone:newLast, achieved, achievedAt });
     } else {
       await dbRun(
-        'UPDATE commitments SET text = ?, enabled = ?, schedule = ?, scheduleDays = ?, reminderEnabled = ?, reminderTime = ?, weeklyTarget = ?, label = ?, target = ? WHERE id = ? AND user_id = ?',
-        [text, enabled?1:0, schedule||null, scheduleDaysJson, reminderEnabled?1:0, reminderTime||null, weeklyTarget||null, label||null, target||null, id, req.user.id]
+        'UPDATE commitments SET text = ?, enabled = ?, schedule = ?, scheduleDays = ?, reminderEnabled = ?, reminderTime = ?, weeklyTarget = ?, label = ?, target = ?, createdAt = COALESCE(?, createdAt) WHERE id = ? AND user_id = ?',
+        [text, enabled?1:0, schedule||null, scheduleDaysJson, reminderEnabled?1:0, reminderTime||null, weeklyTarget||null, label||null, target||null, createdAt||null, id, req.user.id]
       );
       res.json({ success: true });
     }
@@ -364,6 +364,36 @@ async function checkDueReminders(){
 
 setInterval(checkDueReminders, 60 * 1000);
 checkDueReminders();
+
+// One nightly nudge per person, separate from per-commitment reminders --
+// only fires if something scheduled for today is still unmarked, and only
+// once/day (tracked via users.lastEndOfDaySent) regardless of whether a
+// push subscription existed to actually deliver it.
+const END_OF_DAY_HOUR = 20;
+async function checkEndOfDayReminders(){
+  const now = new Date();
+  if(now.getHours() !== END_OF_DAY_HOUR || now.getMinutes() !== 0) return;
+  const today = localDateKey(now);
+  try{
+    const users = await dbAll('SELECT id, lastEndOfDaySent FROM users');
+    for(const user of users){
+      if(user.lastEndOfDaySent === today) continue;
+      await dbRun('UPDATE users SET lastEndOfDaySent = ? WHERE id = ?', [today, user.id]);
+      const commits = await dbAll('SELECT schedule, scheduleDays, doneToday FROM commitments WHERE user_id = ? AND enabled = 1', [user.id]);
+      const incomplete = commits.some(c => isScheduledDay({ schedule: c.schedule, scheduleDays: c.scheduleDays ? JSON.parse(c.scheduleDays) : null }, today) && !c.doneToday);
+      if(!incomplete) continue;
+      const rows = await dbAll('SELECT subscription FROM push_subscriptions WHERE user_id = ?', [user.id]);
+      if(!rows.length) continue;
+      const payload = JSON.stringify({ title: 'Good Cat 🐾', body: "Don't forget to fill out today's commitments!", tag: 'end-of-day' });
+      await sendPushToSubscriptions(rows, payload);
+    }
+  }catch(e){
+    console.error('checkEndOfDayReminders error', e);
+  }
+}
+
+setInterval(checkEndOfDayReminders, 60 * 1000);
+checkEndOfDayReminders();
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, ()=>console.log('API listening on', PORT));

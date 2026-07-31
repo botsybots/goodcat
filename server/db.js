@@ -40,6 +40,9 @@ async function migrate() {
     password TEXT
   )`);
 
+  const userCols = await columnNames('users');
+  if (!userCols.includes('lastEndOfDaySent')) await dbRun('ALTER TABLE users ADD COLUMN lastEndOfDaySent TEXT');
+
   await dbRun(`CREATE TABLE IF NOT EXISTS commitments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,

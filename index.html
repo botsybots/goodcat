@@ -9,6 +9,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css" />
     <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="icons/icon-192.png">
   </head>
   <body>
     <div class="container">
@@ -135,7 +136,7 @@
           <h2>Add Commitment</h2>
           <form id="addForm" class="form-grid">
             <input id="commitText" class="full-width" placeholder="e.g. Take medication" required />
-            <select id="commitFor" class="full-width"></select>
+            <select id="commitFor" class="full-width" style="display:none"></select>
             <select id="commitSchedule" class="full-width">
               <option value="daily">Daily</option>
               <option value="weekdays">Weekdays (Mon–Fri)</option>
@@ -156,13 +157,23 @@
                 <label><input type="checkbox" name="commitDay" value="sun"/><span>Sun</span></label>
               </div>
             </div>
-            <input id="commitLabel" class="full-width" placeholder="Label (e.g. Health)" />
+            <select id="commitLabel" class="full-width">
+              <option value="">No label</option>
+              <option value="Health">🩺 Health</option>
+              <option value="Fitness">💪 Fitness</option>
+              <option value="Education">📚 Education</option>
+              <option value="Cleanliness">🧹 Cleanliness</option>
+              <option value="Relationship">💞 Relationship</option>
+            </select>
             <input id="commitTarget" class="small-input" placeholder="Target streak days" type="number" min="1" />
-            <label class="toggle-switch small"><input type="checkbox" id="commitReminderEnabled" /><span class="toggle-slider"></span><span class="toggle-label">Reminder</span></label>
-            <input id="commitReminderTime" class="small-input" type="time" />
-            <label class="toggle-switch small"><input type="checkbox" id="commitEnabled" checked /><span class="toggle-slider"></span><span class="toggle-label">Enabled</span></label>
+            <label class="full-width small muted" for="commitStartDate">Start on (optional — leave blank to start today)</label>
+            <input id="commitStartDate" class="small-input" type="date" />
+            <label class="toggle-switch small" style="display:none"><input type="checkbox" id="commitReminderEnabled" /><span class="toggle-slider"></span><span class="toggle-label">Reminder</span></label>
+            <input id="commitReminderTime" class="small-input" type="time" style="display:none" />
+            <label class="toggle-switch small" style="display:none"><input type="checkbox" id="commitEnabled" checked /><span class="toggle-slider"></span><span class="toggle-label">Enabled</span></label>
             <button type="submit" class="full-width">Add Commitment</button>
           </form>
+          <p class="small muted">You can add a reminder time or pause a commitment later from its ⋯ menu.</p>
         </div>
       </div>
 
@@ -182,9 +193,6 @@
         </div>
       </div>
 
-      <footer>
-        <small>Local demo — data stored in browser</small>
-      </footer>
     </div>
 <script type="module" src="app.js"></script>
   </body>
