@@ -498,7 +498,10 @@ app.get('/api/leaderboard/weekly', authMiddleware, async (req,res)=>{
     const todayKey = localDateKey(now);
     const weekDatesSoFar = weekDates.filter(d => d <= todayKey);
 
-    const users = await dbAll('SELECT id, name FROM users');
+    // This app is meant for exactly Anna and Jordan -- anything else in the
+    // users table is a stray/test account (registration has no allow-list;
+    // see the security review), and shouldn't show up here.
+    const users = (await dbAll('SELECT id, name FROM users')).filter(u => ['anna','jordan'].includes((u.name||'').toLowerCase()));
     const result = {};
     for(const user of users){
       const commits = await dbAll('SELECT id, schedule, scheduleDays FROM commitments WHERE user_id = ? AND enabled = 1', [user.id]);
