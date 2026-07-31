@@ -85,6 +85,12 @@ h2 {
   font-size: 0.98rem;
 }
 
+.user-switch {
+  margin: 0;
+  font-weight: 700;
+  color: var(--accent-dark);
+}
+
 .small {
   font-size: 0.85rem;
 }
@@ -321,6 +327,11 @@ button {
 button:hover {
   background: var(--paper-dim);
   border-color: var(--accent);
+}
+
+.danger-btn {
+  color: var(--danger);
+  border-color: var(--danger);
 }
 
 button:active {

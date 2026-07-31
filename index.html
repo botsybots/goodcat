@@ -34,7 +34,7 @@
         <div class="title-wrap">
           <h1>Good Cat 🐾</h1>
           <p class="subtitle">Stay on track, lose lives wisely, and paw each other on.</p>
-          <div class="user-switch">You are: <select id="activeUserSelect"></select></div>
+          <div class="user-switch" id="userSwitch"></div>
         </div>
         <button id="settingsBtn" class="icon-button" aria-label="Open settings">⚙️</button>
         </header>
@@ -101,6 +101,10 @@
             <input id="importFileInput" type="file" accept="application/json" style="display:none" />
             <button id="btnShowState" type="button">🛠 Debug Tools</button>
             <p id="notifyStatus" class="small muted"></p>
+          </div>
+          <div class="settings-group">
+            <button id="btnResetProgress" type="button" class="danger-btn">🔄 Reset my progress</button>
+            <p class="small muted">Sets your lives back to 9/9 and your streaks/XP back to zero. Your commitments stay -- this just clears the progress on them. Can't be undone.</p>
           </div>
           <p id="loginStatus" class="small muted"></p>
         </div>

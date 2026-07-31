@@ -362,13 +362,17 @@ app.get('/api/commitments/:id/comments', authMiddleware, async (req,res)=>{
   }
 });
 
-// Propose a commitment for the other person (this app is exactly two
-// people, so "the other person" is just whoever isn't the caller).
+// Propose a commitment for the other person. Resolved by name rather than
+// "whoever isn't me" -- this app is meant for exactly Anna and Jordan, and
+// naming the recipient explicitly avoids ever routing a suggestion to a
+// stray/leftover account if one exists.
 app.post('/api/suggestions', authMiddleware, async (req,res)=>{
   const { text, schedule, scheduleDays, label } = req.body;
   if(!text || !text.trim()) return res.status(400).json({ error: 'text required' });
   try{
-    const toUser = await dbGet('SELECT id, name FROM users WHERE id != ?', [req.user.id]);
+    const myName = (req.user.name || '').toLowerCase();
+    const otherName = myName === 'anna' ? 'jordan' : (myName === 'jordan' ? 'anna' : null);
+    const toUser = otherName ? await dbGet('SELECT id, name FROM users WHERE LOWER(name) = ?', [otherName]) : null;
     if(!toUser) return res.status(400).json({ error: 'no one to suggest this to yet' });
     const scheduleDaysJson = scheduleDays ? JSON.stringify(scheduleDays) : null;
     const result = await dbRun(
@@ -444,6 +448,29 @@ app.post('/api/suggestions/:id/reject', authMiddleware, async (req,res)=>{
     await dbRun('DELETE FROM commitment_suggestions WHERE id = ?', [id]);
     res.json({ success: true });
   }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
+});
+
+// Self-service progress reset -- for trying the app out and wanting a clean
+// slate. Only ever touches the caller's own commitments/XP: zeroes streak,
+// achieved status, and completion history, and resets XP to 0. Leaves the
+// commitments themselves (so nothing has to be re-created), and leaves
+// paws/comments (those are the other person's messages, not "progress").
+app.post('/api/me/reset', authMiddleware, async (req,res)=>{
+  try{
+    const commits = await dbAll('SELECT id FROM commitments WHERE user_id = ?', [req.user.id]);
+    for(const c of commits){
+      await dbRun('DELETE FROM completion_log WHERE commitment_id = ?', [c.id]);
+    }
+    await dbRun(
+      'UPDATE commitments SET streak = 0, doneToday = 0, lastDone = NULL, achieved = 0, achievedAt = NULL, lastReminderSent = NULL WHERE user_id = ?',
+      [req.user.id]
+    );
+    await dbRun('UPDATE users SET xp = 0 WHERE id = ?', [req.user.id]);
+    res.json({ success: true });
+  }catch(e){
+    console.error('POST /api/me/reset error', e);
     res.status(500).json({ error: 'db' });
   }
 });

@@ -43,7 +43,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
 
   // DOM refs
   const commitFor = document.getElementById('commitFor');
-  const activeUserSelect = document.getElementById('activeUserSelect');
+  const userSwitch = document.getElementById('userSwitch');
   const addForm = document.getElementById('addForm');
   const commitText = document.getElementById('commitText');
   const commitEnabled = document.getElementById('commitEnabled');
@@ -109,6 +109,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   const suggestModalTitle = document.getElementById('suggestModalTitle');
   const suggestModalHint = document.getElementById('suggestModalHint');
   const btnLeaderboard = document.getElementById('btnLeaderboard');
+  const btnResetProgress = document.getElementById('btnResetProgress');
   const leaderboardModal = document.getElementById('leaderboardModal');
   const leaderboardClose = document.getElementById('leaderboardClose');
   const leaderboardBody = document.getElementById('leaderboardBody');
@@ -326,7 +327,6 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   }
 
   function lockIdentityControls(locked){
-    if(activeUserSelect) activeUserSelect.disabled = locked;
     if(commitFor) commitFor.disabled = locked;
   }
 
@@ -576,15 +576,13 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
 
   function renderUsers(){
     commitFor.innerHTML = '';
-    if(activeUserSelect) activeUserSelect.innerHTML = '';
     state.users.forEach(u => {
       const opt = document.createElement('option'); opt.value = u.id; opt.textContent = u.name;
       commitFor.appendChild(opt);
-      if(activeUserSelect){ const opt2 = opt.cloneNode(true); activeUserSelect.appendChild(opt2); }
     });
     if(!state.users.find(u => u.id === currentUser)) currentUser = state.users[0]?.id || 'anna';
     commitFor.value = currentUser;
-    if(activeUserSelect) activeUserSelect.value = currentUser;
+    if(userSwitch) userSwitch.textContent = userName(currentUser);
   }
 
   // Overflow ("...") menus: only one open at a time, closed by clicking
@@ -1280,13 +1278,6 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   settingsClose.addEventListener('click', ()=> settingsPanel.classList.add('hidden'));
   settingsPanel.addEventListener('click', e => { if(e.target === settingsPanel) settingsPanel.classList.add('hidden'); });
 
-  if(activeUserSelect){
-    activeUserSelect.addEventListener('change', ()=>{
-      currentUser = activeUserSelect.value;
-      commitFor.value = currentUser;
-      renderList();
-    });
-  }
 
   function updateDebugToolsDisplay(){
     ensureLifeState();
@@ -1372,7 +1363,6 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     editingCommitId = null;
     commitText.value = '';
     if(commitFor) commitFor.value = currentUser;
-    if(activeUserSelect) activeUserSelect.value = currentUser;
     commitSchedule.value = 'daily';
     customDays.style.display = 'none';
     document.querySelectorAll('#customDays input[name="commitDay"]').forEach(input=>input.checked=false);
@@ -1564,6 +1554,50 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   });
   leaderboardClose.addEventListener('click', ()=> leaderboardModal.classList.add('hidden'));
   leaderboardModal.addEventListener('click', e => { if(e.target === leaderboardModal) leaderboardModal.classList.add('hidden'); });
+
+  // --- Reset my progress: for trying the app out and wanting a clean
+  // slate. Wipes server-side streak/history/XP for the caller's own
+  // commitments, then mirrors that locally -- including fast-forwarding
+  // the life ledger's "last evaluated" date to yesterday, so it doesn't
+  // replay the (now-empty) history as a string of missed days. ---
+  if(btnResetProgress){
+    btnResetProgress.addEventListener('click', async ()=>{
+      if(!authToken) return alert('Login first.');
+      if(!confirm(`Reset ${userName(currentUser)}'s progress? This sets lives back to 9/9 and streaks/XP back to zero. Commitments stay, but this can't be undone.`)) return;
+      try{
+        const res = await fetch(apiBase() + '/api/me/reset', { method:'POST', headers:{ authorization:'Bearer '+authToken } });
+        if(!res.ok){ showToast('Something went wrong', 'Could not reset your progress.'); return; }
+      }catch(e){
+        showToast('Offline?', 'Could not reach the server.');
+        return;
+      }
+
+      ensureLifeState();
+      state.commitments.forEach(c => {
+        if(c.for === currentUser){
+          c.history = [];
+          c.streak = 0;
+          c.doneToday = false;
+          c.lastDone = null;
+          c.achieved = false;
+          c.achievedAt = null;
+        }
+      });
+      state.lives[currentUser] = MAX_LIVES;
+      state.lifeLastEvaluatedDate[currentUser] = prevLocalDate(appToday());
+      state.lifeGains[currentUser] = {};
+      state.lifeLosses[currentUser] = {};
+      state.weeklyLifeLosses[currentUser] = {};
+      state.lifeCouncilAck[currentUser] = false;
+      state.usersXp = state.usersXp || {};
+      state.usersXp[currentUser] = 0;
+      save(state);
+      renderList();
+      settingsPanel.classList.add('hidden');
+      showToast('Reset complete', `${userName(currentUser)} is back to 9/9 lives and 0 XP.`);
+      runSync();
+    });
+  }
 
   function renderLeaderboard(data){
     const users = data.users || {};
