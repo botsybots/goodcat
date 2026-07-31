@@ -111,7 +111,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     if(p==='granted'){
       // register service worker and subscribe for push
       try{
-        const reg = await navigator.serviceWorker.register('/service-worker.js');
+        const reg = await navigator.serviceWorker.register('service-worker.js');
         const vap = await fetch(apiBase() + '/api/vapidPublicKey');
         const j = await vap.json();
         const key = j.publicKey;
@@ -1205,6 +1205,13 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   renderList();
   // schedule reminders for current user
   scheduleAllReminders();
+
+  // Register the service worker unconditionally so the app shell is cached
+  // and works offline once loaded -- previously this only happened as a side
+  // effect of enabling notifications, so most sessions never got it at all.
+  if('serviceWorker' in navigator){
+    navigator.serviceWorker.register('service-worker.js').catch(e => console.error('service worker registration failed', e));
+  }
 
   // Expose for debugging
   window._accountability = { state, save };
