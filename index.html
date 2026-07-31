@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Good Cat</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="manifest" href="/manifest.json">
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <div class="title-wrap">
+          <h1>Good Cat</h1>
+          <p class="subtitle">Stay on track, celebrate streaks, and paw each other on.</p>
+        </div>
+        <div class="users">
+          <label for="userSelect">Viewing:</label>
+          <select id="userSelect"></select>
+        </div>
+        <div class="auth">
+            <input id="apiBase" class="api-base" placeholder="API base (http://localhost:3000)" />
+            <input id="authName" placeholder="username" />
+            <input id="authPass" placeholder="password" type="password" />
+            <button id="btnRegister">Register</button>
+            <button id="btnLogin">Login</button>
+            <button id="btnLogout" style="display:none">Logout</button>
+            <button id="btnSync">Sync</button>
+            <button id="btnEnableNotify">Enable Notifications</button>
+            <span id="notifyStatus" class="small muted"></span>
+          </div>
+        </header>
+      <main>
+        <section class="add">
+          <h2>Add Commitment</h2>
+          <form id="addForm" class="form-grid">
+            <input id="commitText" class="full-width" placeholder="e.g. Take medication" required />
+            <select id="commitFor" class="full-width"></select>
+            <select id="commitSchedule" class="full-width">
+              <option value="daily">Daily</option>
+              <option value="weekdays">Weekdays (Mon–Fri)</option>
+              <option value="twice">Twice a week</option>
+              <option value="three">Three times a week</option>
+              <option value="four">Four times a week</option>
+              <option value="custom">Custom</option>
+            </select>
+            <div id="customDays" style="display:none;" class="custom-days full-width">
+              <label class="small muted">Select days</label>
+              <div class="days">
+                <label><input type="checkbox" name="commitDay" value="mon"/><span>Mon</span></label>
+                <label><input type="checkbox" name="commitDay" value="tue"/><span>Tue</span></label>
+                <label><input type="checkbox" name="commitDay" value="wed"/><span>Wed</span></label>
+                <label><input type="checkbox" name="commitDay" value="thu"/><span>Thu</span></label>
+                <label><input type="checkbox" name="commitDay" value="fri"/><span>Fri</span></label>
+                <label><input type="checkbox" name="commitDay" value="sat"/><span>Sat</span></label>
+                <label><input type="checkbox" name="commitDay" value="sun"/><span>Sun</span></label>
+              </div>
+            </div>
+            <input id="commitLabel" class="full-width" placeholder="Label (e.g. Health)" />
+            <input id="commitTarget" class="small-input" placeholder="Target streak days" type="number" min="1" />
+            <label class="toggle-switch small"><input type="checkbox" id="commitReminderEnabled" /><span class="toggle-slider"></span><span class="toggle-label">Reminder</span></label>
+            <input id="commitReminderTime" class="small-input" type="time" />
+            <label class="toggle-switch small"><input type="checkbox" id="commitEnabled" checked /><span class="toggle-slider"></span><span class="toggle-label">Enabled</span></label>
+            <button type="submit" class="full-width">Add Commitment</button>
+          </form>
+        </section>
+
+        <section class="list">
+          <div class="section-header"><h2>Commitments</h2><span class="badge">Cat Crew</span></div>
+          <ul id="commitList"></ul>
+        </section>
+      </main>
+
+      <div id="historyModal" class="modal" style="display:none">
+        <div class="modal-content">
+          <button id="histClose">Close</button>
+          <h3 id="histTitle">History</h3>
+          <div class="heatmap-controls">
+            <label>Zoom:</label>
+            <select id="histZoom">
+              <option value="30">30 days</option>
+              <option value="90">90 days</option>
+              <option value="365">365 days</option>
+            </select>
+          </div>
+          <div id="histHeatmap" class="heatmap"></div>
+        </div>
+      </div>
+
+      <footer>
+        <small>Local demo — data stored in browser</small>
+      </footer>
+    </div>
+    <script src="app.js"></script>
+  </body>
+</html>
