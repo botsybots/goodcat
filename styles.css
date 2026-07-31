@@ -581,6 +581,38 @@ li .card-actions input[type="time"] {
   box-shadow: none;
 }
 
+.debug-warning {
+  color: #fbbf24;
+  font-size: 0.85rem;
+  margin: 4px 0 14px;
+}
+
+.debug-tools {
+  margin-bottom: 6px;
+}
+
+.debug-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.debug-row label {
+  font-size: 0.85rem;
+  color: #cbd5e1;
+}
+
+.debug-row input[type="number"] {
+  width: 70px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.2);
+  background: rgba(255,255,255,0.08);
+  color: #f8fafc;
+}
+
 .debug-panel textarea {
   width: 100%;
   min-height: 260px;

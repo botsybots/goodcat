@@ -1,5 +1,5 @@
-import { localDateKey, todayLocalDate, parseLocalDate, normalizeDate, nextLocalDate, prevLocalDate, getDayKey, weekStartDate } from './date-utils.js';
-import { isScheduledDay, getScheduleDescription, countCompletionsThisWeek, computeStreak } from './schedule-utils.js';
+import { localDateKey, parseLocalDate, nextLocalDate, prevLocalDate, getDayKey, weekStartDate } from './date-utils.js';
+import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCompletionsThisWeek, computeStreak, computeWeeklyStreak } from './schedule-utils.js';
 
 // Simple Accountability App (localStorage-backed)
 (function(){
@@ -65,6 +65,14 @@ import { isScheduledDay, getScheduleDescription, countCompletionsThisWeek, compu
   const debugPanel = document.getElementById('debugPanel');
   const btnShowState = document.getElementById('btnShowState');
   const debugState = document.getElementById('debugState');
+  const debugCurrentDate = document.getElementById('debugCurrentDate');
+  const debugJumpDays = document.getElementById('debugJumpDays');
+  const btnDebugJump = document.getElementById('btnDebugJump');
+  const btnDebugResetDate = document.getElementById('btnDebugResetDate');
+  const btnDebugRunCheck = document.getElementById('btnDebugRunCheck');
+  const debugLivesAnna = document.getElementById('debugLivesAnna');
+  const debugLivesJordan = document.getElementById('debugLivesJordan');
+  const btnDebugSetLives = document.getElementById('btnDebugSetLives');
   const addButton = document.getElementById('addButton');
   const addModal = document.getElementById('addModal');
   const addClose = document.getElementById('addClose');
@@ -133,25 +141,43 @@ import { isScheduledDay, getScheduleDescription, countCompletionsThisWeek, compu
     return user ? user.name : id;
   }
 
+  // The app's "now" — real wall-clock time, shifted forward by any debug day
+  // offset set via the debug tools panel. Everything that decides what
+  // counts as "today" for habits/streaks/lives goes through this, so jumping
+  // the date forward for testing behaves consistently everywhere. Real-time
+  // browser reminders (scheduleReminderFor) deliberately do NOT use this —
+  // they stay tied to actual wall-clock time.
+  function getEffectiveNow(){
+    const d = new Date();
+    d.setDate(d.getDate() + (state.debugDayOffset || 0));
+    d.setHours(0,0,0,0);
+    return d;
+  }
+
+  function appToday(){
+    return localDateKey(getEffectiveNow());
+  }
+
   function getCommitCreatedDate(commit){
-    return commit.createdAt ? commit.createdAt : todayLocalDate();
+    return commit.createdAt ? commit.createdAt : appToday();
   }
 
   // Reuse schedule helpers from schedule-utils.js
 
   function rebuildStreak(commit){
     if(!commit || !commit.history) return 0;
-    return computeStreak(commit, commit.history, todayLocalDate());
+    if(isWeeklyTargetSchedule(commit)) return computeWeeklyStreak(commit, commit.history, appToday());
+    return computeStreak(commit, commit.history, appToday());
   }
 
   function updateCommitStatusFromHistory(commit){
     if(!commit) return;
     commit.history = commit.history || [];
     commit.streak = rebuildStreak(commit);
-    commit.doneToday = commit.history.includes(todayLocalDate());
+    commit.doneToday = commit.history.includes(appToday());
     if(commit.target && commit.streak >= commit.target){
       commit.achieved = true;
-      commit.achievedAt = commit.achievedAt || todayLocalDate();
+      commit.achievedAt = commit.achievedAt || appToday();
     } else if(commit.target && commit.streak < commit.target){
       commit.achieved = false;
     }
@@ -164,11 +190,15 @@ import { isScheduledDay, getScheduleDescription, countCompletionsThisWeek, compu
     if(!state.lifeLastEvaluatedDate) state.lifeLastEvaluatedDate = { anna: null, jordan: null };
     if(!state.lifeGains) state.lifeGains = { anna: {}, jordan: {} };
     if(!state.lifeLosses) state.lifeLosses = { anna: {}, jordan: {} };
+    if(!state.weeklyLifeLosses) state.weeklyLifeLosses = { anna: {}, jordan: {} };
     if(!state.lifeCouncilAck) state.lifeCouncilAck = { anna: false, jordan: false };
   }
 
+  // Day-based commitments only (daily/weekdays/custom) — "N times a week"
+  // commitments aren't due on any particular calendar day, so they're
+  // evaluated separately, once per week, in getUserWeeklyComplianceForWeek().
   function getUserScheduledCountsForDate(userId, date){
-    const commits = state.commitments.filter(c => c.for === userId && c.enabled);
+    const commits = state.commitments.filter(c => c.for === userId && c.enabled && !isWeeklyTargetSchedule(c));
     const isoDate = localDateKey(date);
     let scheduled = 0;
     let done = 0;
@@ -181,6 +211,25 @@ import { isScheduledDay, getScheduleDescription, countCompletionsThisWeek, compu
       }
     }
     return { scheduled, done };
+  }
+
+  // Aggregate weekly-target ("twice/three/four a week") compliance for one
+  // user across a single week, so a habit only costs a life once at that
+  // week's end (Sunday), and only if its weekly quota wasn't met — never on
+  // the other days of the week.
+  function getUserWeeklyComplianceForWeek(userId, weekStartDateObj){
+    const weekEndIso = localDateKey(new Date(weekStartDateObj.getTime() + 6 * 24 * 60 * 60 * 1000));
+    const commits = state.commitments.filter(c => c.for === userId && c.enabled && isWeeklyTargetSchedule(c));
+    let total = 0;
+    let compliant = 0;
+    for(const commit of commits){
+      const created = getCommitCreatedDate(commit);
+      if(created > weekEndIso) continue;
+      total += 1;
+      const count = countCompletionsThisWeek(commit, weekStartDateObj);
+      if(count >= (commit.weeklyTarget || 0)) compliant += 1;
+    }
+    return { total, compliant };
   }
 
   function getWindowDates(endDate, windowSize = 7){
@@ -196,7 +245,7 @@ import { isScheduledDay, getScheduleDescription, countCompletionsThisWeek, compu
 
   function updateLivesForUser(userId){
     ensureLifeState();
-    const today = todayLocalDate();
+    const today = appToday();
     const yesterday = prevLocalDate(today);
     let startDate = state.lifeLastEvaluatedDate[userId] ? nextLocalDate(state.lifeLastEvaluatedDate[userId]) : null;
     if(!startDate){
@@ -217,6 +266,21 @@ import { isScheduledDay, getScheduleDescription, countCompletionsThisWeek, compu
           state.lifeLosses[userId][dayKey] = true;
           state.lives[userId] = Math.max(0, state.lives[userId] - 1);
           if(dayKey === yesterday || dayKey === today) showToast('Bots is judging you', `${userName(userId)} missed a scheduled habit.`);
+        }
+      }
+      // "N times a week" habits are only judged once, at the end of their
+      // week (Sunday) — never on the other days — so a "twice a week" habit
+      // can't cost a life on the five days it isn't due.
+      if(getDayKey(dayKey) === 'sun'){
+        const weekStart = weekStartDate(cursor);
+        const weekStartIso = localDateKey(weekStart);
+        if(!state.weeklyLifeLosses[userId][weekStartIso]){
+          const compliance = getUserWeeklyComplianceForWeek(userId, weekStart);
+          if(compliance.total > 0 && compliance.compliant < compliance.total){
+            state.weeklyLifeLosses[userId][weekStartIso] = true;
+            state.lives[userId] = Math.max(0, state.lives[userId] - 1);
+            if(dayKey === yesterday || dayKey === today) showToast('Bots is judging you', `${userName(userId)} missed a weekly target.`);
+          }
         }
       }
       const window = getWindowDates(dayKey, 7);
@@ -354,7 +418,7 @@ import { isScheduledDay, getScheduleDescription, countCompletionsThisWeek, compu
       }
       // weekly progress for N-times-per-week schedules
       if(c.weeklyTarget){
-        const weeklyCount = countCompletionsThisWeek(c, new Date());
+        const weeklyCount = countCompletionsThisWeek(c, getEffectiveNow());
         const wPercent = Math.min(100, Math.round((weeklyCount / c.weeklyTarget) * 100));
         const wp = document.createElement('div'); wp.className='weekly-progress';
         wp.innerHTML = `<div class="weekly-meta">This week: <strong>${weeklyCount}</strong> / ${c.weeklyTarget}</div><div class="weekly-bar"><div class="weekly-fill" style="width:${wPercent}%"></div></div>`;
@@ -369,7 +433,7 @@ import { isScheduledDay, getScheduleDescription, countCompletionsThisWeek, compu
       const doneCheckbox = done.querySelector('input');
       doneCheckbox.title = 'Mark done for today';
       doneCheckbox.addEventListener('change', ()=>{
-        const today = normalizeDate(new Date());
+        const today = appToday();
         c.history = c.history || [];
         if(doneCheckbox.checked){
           if(!c.history.includes(today)) c.history.push(today);
@@ -470,7 +534,7 @@ import { isScheduledDay, getScheduleDescription, countCompletionsThisWeek, compu
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `good-cat-backup-${todayLocalDate()}.json`;
+    a.download = `good-cat-backup-${appToday()}.json`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -605,7 +669,7 @@ import { isScheduledDay, getScheduleDescription, countCompletionsThisWeek, compu
         reminderEnabled: !!r.reminderEnabled,
         reminderTime: r.reminderTime||null,
         weeklyTarget: r.weeklyTarget||null,
-        createdAt: r.createdAt || todayLocalDate()
+        createdAt: r.createdAt || appToday()
       });
     }
     save(state);
@@ -630,12 +694,23 @@ import { isScheduledDay, getScheduleDescription, countCompletionsThisWeek, compu
     });
   }
 
+  function updateDebugToolsDisplay(){
+    ensureLifeState();
+    if(debugCurrentDate){
+      const offset = state.debugDayOffset || 0;
+      debugCurrentDate.textContent = appToday() + (offset ? ` (real date +${offset}d)` : ' (real date)');
+    }
+    if(debugLivesAnna) debugLivesAnna.value = state.lives.anna;
+    if(debugLivesJordan) debugLivesJordan.value = state.lives.jordan;
+  }
+
   function toggleDebugPanel(show){
     if(!debugPanel) return;
-    const visible = show === undefined ? debugPanel.classList.contains('hidden') : !show;
+    const visible = show === undefined ? debugPanel.classList.contains('hidden') : show;
     debugPanel.classList.toggle('hidden', !visible);
     if(visible){
       debugState.textContent = JSON.stringify(state, null, 2);
+      updateDebugToolsDisplay();
     }
   }
 
@@ -648,6 +723,48 @@ import { isScheduledDay, getScheduleDescription, countCompletionsThisWeek, compu
 
   if(btnShowState){
     btnShowState.addEventListener('click', ()=>{
+      toggleDebugPanel(true);
+    });
+  }
+
+  if(btnDebugJump){
+    btnDebugJump.addEventListener('click', ()=>{
+      const n = parseInt(debugJumpDays.value, 10);
+      if(!n || n < 1) return alert('Enter a positive number of days to jump forward.');
+      state.debugDayOffset = (state.debugDayOffset || 0) + n;
+      save(state);
+      renderList();
+      toggleDebugPanel(true);
+    });
+  }
+
+  if(btnDebugResetDate){
+    btnDebugResetDate.addEventListener('click', ()=>{
+      state.debugDayOffset = 0;
+      save(state);
+      renderList();
+      toggleDebugPanel(true);
+    });
+  }
+
+  if(btnDebugRunCheck){
+    btnDebugRunCheck.addEventListener('click', ()=>{
+      updateLivesForUser('anna');
+      updateLivesForUser('jordan');
+      renderList();
+      toggleDebugPanel(true);
+    });
+  }
+
+  if(btnDebugSetLives){
+    btnDebugSetLives.addEventListener('click', ()=>{
+      ensureLifeState();
+      const a = parseInt(debugLivesAnna.value, 10);
+      const j = parseInt(debugLivesJordan.value, 10);
+      if(!Number.isNaN(a)) state.lives.anna = Math.min(MAX_LIVES, Math.max(0, a));
+      if(!Number.isNaN(j)) state.lives.jordan = Math.min(MAX_LIVES, Math.max(0, j));
+      save(state);
+      renderLives();
       toggleDebugPanel(true);
     });
   }
@@ -692,7 +809,7 @@ import { isScheduledDay, getScheduleDescription, countCompletionsThisWeek, compu
 
   function getLastNDates(n){
     const out = [];
-    const today = new Date();
+    const today = getEffectiveNow();
     for(let i = n-1;i>=0;i--){
       const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - i);
       out.push(localDateKey(d));
@@ -790,7 +907,7 @@ import { isScheduledDay, getScheduleDescription, countCompletionsThisWeek, compu
         scheduleReminderFor(commitItem);
       }
     } else {
-      commitItem = { id: uid(), text, for: forUser, enabled, doneToday:false, schedule, scheduleDays, streak:0, lastDone:null, remoteId:null, history: [], label, target, reminderEnabled, reminderTime, paws:0, comments: [], weeklyTarget, createdAt: todayLocalDate() };
+      commitItem = { id: uid(), text, for: forUser, enabled, doneToday:false, schedule, scheduleDays, streak:0, lastDone:null, remoteId:null, history: [], label, target, reminderEnabled, reminderTime, paws:0, comments: [], weeklyTarget, createdAt: appToday() };
       state.commitments.push(commitItem);
       scheduleReminderFor(commitItem);
     }
