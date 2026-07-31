@@ -1,6 +1,6 @@
 /* Service Worker for Good Cat -- caches the app shell so it works offline
    once loaded, and still handles push notifications as before. */
-const CACHE_NAME = 'good-cat-v1';
+const CACHE_NAME = 'good-cat-v2';
 const APP_SHELL = [
   './',
   './index.html',
@@ -28,10 +28,13 @@ self.addEventListener('activate', event => {
   );
 });
 
-// Cache-first for the app shell (instant offline load), falling back to the
-// network and refreshing the cache in the background so updates still land.
-// Anything to /api/ always goes straight to the network -- that data is
-// live, never something to serve stale from cache.
+// Network-first for the app shell: this app ships updates often, and a
+// cache-first strategy meant devices could sit on stale app.js/index.html
+// indefinitely (a device seeing a feature that isn't there yet, or a fix
+// that never lands). Always try the network first and cache the fresh
+// response; fall back to the cache only when actually offline. Anything to
+// /api/ always goes straight to the network -- that data is live, never
+// something to serve stale from cache.
 self.addEventListener('fetch', event => {
   const req = event.request;
   if(req.method !== 'GET') return;
@@ -40,16 +43,13 @@ self.addEventListener('fetch', event => {
   if(url.origin !== self.location.origin || url.pathname.includes('/api/')) return;
 
   event.respondWith(
-    caches.match(req).then(cached => {
-      const networkFetch = fetch(req).then(res => {
-        if(res && res.ok && res.type === 'basic'){
-          const copy = res.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(req, copy));
-        }
-        return res;
-      }).catch(() => cached);
-      return cached || networkFetch;
-    })
+    fetch(req).then(res => {
+      if(res && res.ok && res.type === 'basic'){
+        const copy = res.clone();
+        caches.open(CACHE_NAME).then(cache => cache.put(req, copy));
+      }
+      return res;
+    }).catch(() => caches.match(req))
   );
 });
 

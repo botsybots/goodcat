@@ -55,7 +55,6 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   const commitStartDate = document.getElementById('commitStartDate');
   const commitReminderEnabled = document.getElementById('commitReminderEnabled');
   const commitReminderTime = document.getElementById('commitReminderTime');
-  const apiBaseInput = document.getElementById('apiBase');
   const customDays = document.getElementById('customDays');
   const authName = document.getElementById('authName');
   const authPass = document.getElementById('authPass');
@@ -159,7 +158,6 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
 
   let authToken = localStorage.getItem('accountability:token') || null;
   let syncIntervalId = null;
-  apiBaseInput.value = localStorage.getItem('accountability:api') || DEFAULT_API_BASE;
   if(authToken){
     const payload = decodeJwtPayload(authToken);
     if(payload) adoptIdentityFromLogin(payload);
@@ -982,9 +980,11 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     renderLevels();
   }
 
-  // Remote sync helpers
+  // Remote sync helpers. Always the production server -- a ?api=... query
+  // param can override for local dev testing, but nothing here persists to
+  // localStorage, so a device can never get stuck pointed at a stale address.
   function apiBase(){
-    return apiBaseInput.value || DEFAULT_API_BASE;
+    return new URLSearchParams(location.search).get('api') || DEFAULT_API_BASE;
   }
 
   function setLoginStatus(text){
@@ -1090,7 +1090,6 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     authToken = t;
     if(t){
       localStorage.setItem('accountability:token', t);
-      localStorage.setItem('accountability:api', apiBase());
       btnLogout.style.display='inline';
       setLoginStatus('Logged in');
       setAuthGateStatus('');
