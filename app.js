@@ -9,6 +9,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   ];
 
   const STORAGE_KEY = 'accountability:data:v1';
+  const DEFAULT_API_BASE = 'https://goodcat-api.onrender.com';
 
   function load(){
     try{
@@ -105,8 +106,8 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
 
   let authToken = localStorage.getItem('accountability:token') || null;
   let syncIntervalId = null;
+  apiBaseInput.value = localStorage.getItem('accountability:api') || DEFAULT_API_BASE;
   if(authToken){
-    apiBaseInput.value = localStorage.getItem('accountability:api') || 'http://localhost:3000';
     const payload = decodeJwtPayload(authToken);
     if(payload) adoptIdentityFromLogin(payload);
     setToken(authToken);
@@ -797,7 +798,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
 
   // Remote sync helpers
   function apiBase(){
-    return apiBaseInput.value || 'http://localhost:3000';
+    return apiBaseInput.value || DEFAULT_API_BASE;
   }
 
   function setLoginStatus(text){
