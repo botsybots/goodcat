@@ -93,6 +93,16 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     }catch(e){ return null; }
   }
 
+  // iOS in particular doesn't reliably guarantee that a home-screen-installed
+  // web app's localStorage survives the way a regular Safari tab's does --
+  // it can get evicted under storage pressure, silently logging you back out
+  // and re-showing the login gate. Asking for persistent storage tells the
+  // browser not to do that. Not all browsers support/grant this, but it's
+  // harmless where it isn't.
+  if(navigator.storage && navigator.storage.persist){
+    navigator.storage.persist().catch(()=>{});
+  }
+
   let authToken = localStorage.getItem('accountability:token') || null;
   let syncIntervalId = null;
   if(authToken){
