@@ -386,35 +386,134 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     if(activeUserSelect) activeUserSelect.value = currentUser;
   }
 
+  // Overflow ("...") menus: only one open at a time, closed by clicking
+  // anywhere outside a menu/menu-button, or automatically whenever the list
+  // re-renders (every state-changing action calls renderList()).
+  function closeAllCardMenus(){
+    document.querySelectorAll('.card-menu:not(.hidden)').forEach(m => m.classList.add('hidden'));
+  }
+
+  function toggleCardMenu(menuEl){
+    const isHidden = menuEl.classList.contains('hidden');
+    closeAllCardMenus();
+    if(isHidden) menuEl.classList.remove('hidden');
+  }
+
+  document.addEventListener('click', (e)=>{
+    if(!e.target.closest('.card-menu') && !e.target.closest('.card-menu-btn')){
+      closeAllCardMenus();
+    }
+  });
+
+  function toggleCommitDone(c){
+    const today = appToday();
+    c.history = c.history || [];
+    if(!c.doneToday){
+      if(!c.history.includes(today)) c.history.push(today);
+      c.doneToday = true;
+      showToast('Loki is pleased with ' + userName(c.for), `${c.text} was completed.`);
+    } else {
+      c.doneToday = false;
+      const idx = c.history.indexOf(today);
+      if(idx >= 0) c.history.splice(idx, 1);
+    }
+    updateCommitStatusFromHistory(c);
+    if(c.target && c.streak >= c.target){
+      c.achieved = true;
+      c.achievedAt = c.achievedAt || today;
+    } else if(c.target && c.streak < c.target){
+      c.achieved = false;
+    }
+    if(c.doneToday) c.lastDone = today;
+    save(state);
+    updateLivesForUser(c.for);
+    renderList();
+    scheduleReminderFor(c);
+    if(authToken && c.remoteId){
+      fetch(apiBase() + '/api/commitments/' + c.remoteId, { method: 'PUT', headers: { 'content-type':'application/json', 'authorization':'Bearer '+authToken }, body: JSON.stringify({ text: c.text, enabled: c.enabled, doneToday: c.doneToday, schedule: c.schedule, label: c.label, target: c.target, achieved: c.achieved, achievedAt: c.achievedAt }) }).then(r=>r.json()).then(j=>{
+        if(j && j.streak!==undefined) { c.streak = j.streak; c.lastDone = j.lastDone; c.achieved = j.achieved||c.achieved; c.achievedAt = j.achievedAt||c.achievedAt; save(state); renderList(); }
+      }).catch(()=>{});
+    }
+  }
+
+  function hasPawedToday(c){
+    return Array.isArray(c.pawLog) && c.pawLog.some(p => p.date === appToday());
+  }
+
+  function pawCountFor(c){
+    return Array.isArray(c.pawLog) ? c.pawLog.length : (c.paws || 0);
+  }
+
+  function givePaw(c, fromUserId){
+    if(hasPawedToday(c)) return;
+    c.pawLog = c.pawLog || [];
+    c.pawLog.push({ date: appToday(), by: fromUserId });
+    save(state);
+    renderList();
+    showToast('Paw sent!', `${userName(fromUserId)} cheered on “${c.text}”.`);
+  }
+
   function renderCommitmentsForUser(userId, targetList){
     targetList.innerHTML = '';
     const visible = state.commitments.filter(c => c.for === userId);
     if(visible.length === 0){
-      targetList.innerHTML = '<li class="small muted">No commitments yet. Tap + to add a commitment and keep your streak alive.</li>';
+      targetList.innerHTML = '<li class="empty-state small muted">Nothing here yet. Tap + and give the Good Cat something to keep an eye on.</li>';
       return;
     }
     visible.forEach(c => {
       c.history = c.history || [];
       updateCommitStatusFromHistory(c);
       const li = document.createElement('li');
-      const meta = document.createElement('div'); meta.className='card-main';
-      const titleRow = document.createElement('div'); titleRow.className='card-title';
-      const icon = document.createElement('div'); icon.className='card-icon';
+      li.className = 'commit-card';
+      li.classList.toggle('is-done', !!c.doneToday);
+      li.classList.toggle('is-paused', !c.enabled);
+
+      const topRow = document.createElement('div'); topRow.className = 'card-top-row';
+      const icon = document.createElement('div'); icon.className='card-status-icon';
       icon.textContent = c.achieved ? '🏆' : c.doneToday ? '✅' : '📌';
-      const textWrapper = document.createElement('div'); textWrapper.className='card-text';
-      const labelHtml = c.label ? `<span class="label-badge">${escapeHtml(c.label)}</span> ` : '';
-      const achievedHtml = c.achieved ? `<span class="achieved-badge">Achieved</span> ` : '';
-      const sched = getScheduleDescription(c);
-      const targetHtml = c.target ? ` · Streak: ${c.streak||0} / ${c.target}` : ` · Streak: ${c.streak||0}`;
-      textWrapper.innerHTML = `${labelHtml}${achievedHtml}<strong>${escapeHtml(c.text)}</strong><div class="card-meta">${c.enabled ? 'Enabled' : 'Disabled'} · ${sched}${targetHtml}</div>`;
-      titleRow.appendChild(icon);
-      titleRow.appendChild(textWrapper);
-      meta.appendChild(titleRow);
+
+      const body = document.createElement('div'); body.className='card-body';
+      const badgesHtml = [
+        !c.enabled ? '<span class="paused-badge">Paused</span>' : '',
+        c.label ? `<span class="label-badge">${escapeHtml(c.label)}</span>` : '',
+        c.achieved ? '<span class="achieved-badge">Achieved</span>' : ''
+      ].filter(Boolean).join(' ');
+      body.innerHTML = `
+        <strong class="card-name">${escapeHtml(c.text)}</strong>
+        ${badgesHtml ? `<div class="card-badges">${badgesHtml}</div>` : ''}
+        <div class="card-meta">${getScheduleDescription(c)}</div>
+      `;
+
+      const sideActions = document.createElement('div'); sideActions.className = 'card-side-actions';
+      const canPaw = c.for !== currentUser;
+      if(canPaw){
+        const pawBtn = document.createElement('button');
+        pawBtn.type = 'button';
+        pawBtn.className = 'paw-button';
+        const alreadyPawed = hasPawedToday(c);
+        pawBtn.textContent = '🐾';
+        pawBtn.disabled = alreadyPawed;
+        pawBtn.title = alreadyPawed ? 'Already pawed today' : `Send ${userName(c.for)} a paw`;
+        pawBtn.addEventListener('click', ()=> givePaw(c, currentUser));
+        sideActions.appendChild(pawBtn);
+      }
+      const menuBtn = document.createElement('button');
+      menuBtn.type = 'button';
+      menuBtn.className = 'card-menu-btn';
+      menuBtn.setAttribute('aria-label', 'More actions');
+      menuBtn.textContent = '⋯';
+      sideActions.appendChild(menuBtn);
+
+      topRow.appendChild(icon);
+      topRow.appendChild(body);
+      topRow.appendChild(sideActions);
+      li.appendChild(topRow);
+
       if(c.target){
         const progress = document.createElement('div'); progress.className = 'card-progress';
         const percent = Math.min(100, Math.round(((c.streak||0) / c.target) * 100));
-        progress.innerHTML = `<div class="progress-bar"><div class="progress-fill" style="width:${percent}%"></div></div><div class="progress-text">${c.streak||0} / ${c.target} days streak (${percent}%)</div>`;
-        meta.appendChild(progress);
+        progress.innerHTML = `<div class="progress-bar"><div class="progress-fill" style="width:${percent}%"></div></div><div class="progress-text">${c.streak||0} / ${c.target} days (${percent}%)</div>`;
+        li.appendChild(progress);
       }
       // weekly progress for N-times-per-week schedules
       if(c.weeklyTarget){
@@ -422,90 +521,76 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
         const wPercent = Math.min(100, Math.round((weeklyCount / c.weeklyTarget) * 100));
         const wp = document.createElement('div'); wp.className='weekly-progress';
         wp.innerHTML = `<div class="weekly-meta">This week: <strong>${weeklyCount}</strong> / ${c.weeklyTarget}</div><div class="weekly-bar"><div class="weekly-fill" style="width:${wPercent}%"></div></div>`;
-        meta.appendChild(wp);
+        li.appendChild(wp);
       }
 
-      const controls = document.createElement('div'); controls.className='card-actions';
+      const pawCount = pawCountFor(c);
+      if(pawCount > 0){
+        const lastPaw = Array.isArray(c.pawLog) && c.pawLog.length ? c.pawLog[c.pawLog.length - 1] : null;
+        const pawChip = document.createElement('div'); pawChip.className = 'paw-chip';
+        pawChip.textContent = lastPaw ? `🐾 ${pawCount} · last from ${userName(lastPaw.by)}` : `🐾 ${pawCount}`;
+        li.appendChild(pawChip);
+      }
 
-      const done = document.createElement('label');
-      done.className = 'toggle-switch';
-      done.innerHTML = `<input type="checkbox" ${c.doneToday? 'checked':''}/><span class="toggle-slider"></span><span class="toggle-label">Done</span>`;
-      const doneCheckbox = done.querySelector('input');
-      doneCheckbox.title = 'Mark done for today';
-      doneCheckbox.addEventListener('change', ()=>{
-        const today = appToday();
-        c.history = c.history || [];
-        if(doneCheckbox.checked){
-          if(!c.history.includes(today)) c.history.push(today);
-          c.doneToday = true;
-          showToast('Loki is pleased with ' + userName(c.for), `${c.text} was completed.`);
-        } else {
-          c.doneToday = false;
-          const idx = c.history.indexOf(today);
-          if(idx >= 0) c.history.splice(idx, 1);
-        }
-        updateCommitStatusFromHistory(c);
-        if(c.target && c.streak >= c.target){
-          c.achieved = true;
-          c.achievedAt = c.achievedAt || today;
-        } else if(c.target && c.streak < c.target){
-          c.achieved = false;
-        }
-        if(c.doneToday) c.lastDone = today;
+      if(c.comments && c.comments.length){
+        const commentPreview = document.createElement('div');
+        commentPreview.className = 'comment-preview';
+        commentPreview.textContent = `Latest meow: ${c.comments[c.comments.length-1]}`;
+        li.appendChild(commentPreview);
+      }
+
+      // Overflow menu: Edit / Reminder / History / Delete
+      const menu = document.createElement('div'); menu.className = 'card-menu hidden';
+
+      const editBtn = document.createElement('button'); editBtn.type='button'; editBtn.className='menu-item'; editBtn.textContent = '✏️ Edit';
+      editBtn.addEventListener('click', ()=>{ closeAllCardMenus(); openEditCommit(c); });
+
+      const reminderRow = document.createElement('div'); reminderRow.className = 'menu-item menu-reminder';
+      const reminderToggle = document.createElement('label'); reminderToggle.className = 'toggle-switch small';
+      reminderToggle.innerHTML = `<input type="checkbox" ${c.reminderEnabled ? 'checked':''}/><span class="toggle-slider"></span><span class="toggle-label">Reminder</span>`;
+      const reminderCheckbox = reminderToggle.querySelector('input');
+      const reminderTimeInput = document.createElement('input');
+      reminderTimeInput.type = 'time';
+      reminderTimeInput.className = 'menu-reminder-time';
+      reminderTimeInput.value = c.reminderTime || '';
+      function saveReminder(){
+        c.reminderEnabled = reminderCheckbox.checked;
+        c.reminderTime = reminderTimeInput.value || null;
         save(state);
-        updateLivesForUser(c.for);
-        renderList();
         scheduleReminderFor(c);
-        if(authToken && c.remoteId){
-          fetch(apiBase() + '/api/commitments/' + c.remoteId, { method: 'PUT', headers: { 'content-type':'application/json', 'authorization':'Bearer '+authToken }, body: JSON.stringify({ text: c.text, enabled: c.enabled, doneToday: c.doneToday, schedule: c.schedule, label: c.label, target: c.target, achieved: c.achieved, achievedAt: c.achievedAt }) }).then(r=>r.json()).then(j=>{
-            if(j && j.streak!==undefined) { c.streak = j.streak; c.lastDone = j.lastDone; c.achieved = j.achieved||c.achieved; c.achievedAt = j.achievedAt||c.achievedAt; save(state); renderList(); }
-          }).catch(()=>{});
-        }
-      });
-
-      const pawsBtn = document.createElement('button');
-      pawsBtn.className = 'paw-button small-action';
-      pawsBtn.textContent = `🐾 ${c.paws || 0}`;
-      pawsBtn.title = 'Send a paw';
-      pawsBtn.addEventListener('click', ()=>{
-        c.paws = (c.paws || 0) + 1;
-        save(state);
         renderList();
-        showToast('Paw sent!', `You cheered on “${c.text}”.`);
-      });
+      }
+      reminderCheckbox.addEventListener('change', saveReminder);
+      reminderTimeInput.addEventListener('change', saveReminder);
+      reminderRow.appendChild(reminderToggle);
+      reminderRow.appendChild(reminderTimeInput);
 
-      const histBtn = document.createElement('button'); histBtn.className='small-action'; histBtn.textContent='History';
-      histBtn.addEventListener('click', ()=>{ showHistory(c); });
+      const histBtn = document.createElement('button'); histBtn.type='button'; histBtn.className='menu-item'; histBtn.textContent='📅 History';
+      histBtn.addEventListener('click', ()=>{ closeAllCardMenus(); showHistory(c); });
 
-      const editBtn = document.createElement('button'); editBtn.className='small-action'; editBtn.textContent = 'Edit';
-      editBtn.addEventListener('click', ()=> openEditCommit(c));
-
-      const del = document.createElement('button'); del.className='small-action danger'; del.textContent='Delete';
+      const del = document.createElement('button'); del.type='button'; del.className='menu-item danger'; del.textContent='🗑 Delete';
       del.addEventListener('click', ()=>{
+        closeAllCardMenus();
         if(!confirm(`Delete “${c.text}”? This cannot be undone.`)) return;
         state.commitments = state.commitments.filter(x=>x.id!==c.id);
         save(state);
         renderList();
       });
 
-      controls.appendChild(done);
-      controls.appendChild(pawsBtn);
-      controls.appendChild(histBtn);
-      controls.appendChild(editBtn);
-      controls.appendChild(del);
+      menu.appendChild(editBtn);
+      menu.appendChild(reminderRow);
+      menu.appendChild(histBtn);
+      menu.appendChild(del);
+      li.appendChild(menu);
 
-      if(c.comments && c.comments.length){
-        const commentPreview = document.createElement('div');
-        commentPreview.className = 'comment-preview';
-        commentPreview.textContent = `Latest meow: ${c.comments[c.comments.length-1]}`;
-        meta.appendChild(commentPreview);
-      }
+      menuBtn.addEventListener('click', (event)=>{
+        event.stopPropagation();
+        toggleCardMenu(menu);
+      });
 
-      li.appendChild(meta);
-      li.appendChild(controls);
       li.addEventListener('click', (event)=>{
-        if(event.target.closest('.card-actions')) return;
-        openEditCommit(c);
+        if(event.target.closest('.card-side-actions') || event.target.closest('.card-menu')) return;
+        toggleCommitDone(c);
       });
       targetList.appendChild(li);
     });
