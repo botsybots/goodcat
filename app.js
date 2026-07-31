@@ -424,13 +424,28 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   // re-renders (every state-changing action calls renderList()).
   function closeAllCardMenus(){
     document.querySelectorAll('.card-menu:not(.hidden)').forEach(m => m.classList.add('hidden'));
+    document.querySelectorAll('.card-menu-btn[aria-expanded="true"]').forEach(b => b.setAttribute('aria-expanded', 'false'));
   }
 
-  function toggleCardMenu(menuEl){
+  function toggleCardMenu(menuEl, btnEl){
     const isHidden = menuEl.classList.contains('hidden');
     closeAllCardMenus();
-    if(isHidden) menuEl.classList.remove('hidden');
+    if(isHidden){
+      menuEl.classList.remove('hidden');
+      if(btnEl) btnEl.setAttribute('aria-expanded', 'true');
+    }
   }
+
+  // Escape closes an open menu and returns focus to the button that opened
+  // it, so keyboard users aren't left with focus stranded on a hidden menu.
+  document.addEventListener('keydown', e => {
+    if(e.key !== 'Escape') return;
+    const openMenu = document.querySelector('.card-menu:not(.hidden)');
+    if(!openMenu) return;
+    const btn = document.querySelector(`.card-menu-btn[aria-controls="${openMenu.id}"]`);
+    closeAllCardMenus();
+    if(btn) btn.focus();
+  });
 
   document.addEventListener('click', (e)=>{
     if(!e.target.closest('.card-menu') && !e.target.closest('.card-menu-btn')){
@@ -595,9 +610,26 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
       li.classList.toggle('is-done', !!c.doneToday);
       li.classList.toggle('is-paused', !c.enabled);
 
+      const owned = canEditCommit(c);
       const topRow = document.createElement('div'); topRow.className = 'card-top-row';
-      const icon = document.createElement('div'); icon.className='card-status-icon';
+      // The status icon doubles as the keyboard-accessible way to toggle
+      // done: tap-anywhere-on-card (below) covers mouse/touch, but a card's
+      // own aria-label would otherwise have to summarize (and thus hide from
+      // screen readers) all the rich content elsewhere on it -- badges,
+      // schedule, progress, paw chip, comments. A small labeled button keeps
+      // that content readable while still giving keyboard/AT users a real
+      // control. Not owned -> purely decorative, nothing to operate here.
+      const icon = document.createElement(owned ? 'button' : 'div');
+      icon.className = 'card-status-icon';
       icon.textContent = c.achieved ? '🏆' : c.doneToday ? '✅' : '📌';
+      if(owned){
+        icon.type = 'button';
+        icon.setAttribute('aria-pressed', c.doneToday ? 'true' : 'false');
+        icon.setAttribute('aria-label', c.doneToday ? `Mark "${c.text}" not done` : `Mark "${c.text}" done`);
+        icon.addEventListener('click', (e)=>{ e.stopPropagation(); toggleCommitDone(c); });
+      } else {
+        icon.setAttribute('aria-hidden', 'true');
+      }
 
       const body = document.createElement('div'); body.className='card-body';
       const badgesHtml = [
@@ -621,14 +653,18 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
         pawBtn.textContent = '🐾';
         pawBtn.disabled = alreadyPawed;
         pawBtn.title = alreadyPawed ? 'Already pawed today' : `Send ${userName(c.for)} a paw`;
+        pawBtn.setAttribute('aria-label', pawBtn.title);
         pawBtn.addEventListener('click', ()=> givePaw(c, currentUser));
         sideActions.appendChild(pawBtn);
       }
-      const owned = canEditCommit(c);
       const menuBtn = document.createElement('button');
       menuBtn.type = 'button';
       menuBtn.className = 'card-menu-btn';
-      menuBtn.setAttribute('aria-label', 'More actions');
+      menuBtn.setAttribute('aria-label', `More actions for "${c.text}"`);
+      menuBtn.setAttribute('aria-haspopup', 'true');
+      menuBtn.setAttribute('aria-expanded', 'false');
+      const menuId = 'card-menu-' + c.id;
+      menuBtn.setAttribute('aria-controls', menuId);
       menuBtn.textContent = '⋯';
       sideActions.appendChild(menuBtn);
 
@@ -672,7 +708,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
       // Overflow menu: Edit/Reminder/Delete are owner-only once logged in;
       // History and Comment are open to both, since viewing/encouraging is
       // the whole point of the other person seeing your habits.
-      const menu = document.createElement('div'); menu.className = 'card-menu hidden';
+      const menu = document.createElement('div'); menu.className = 'card-menu hidden'; menu.id = menuId;
 
       if(owned){
         const editBtn = document.createElement('button'); editBtn.type='button'; editBtn.className='menu-item'; editBtn.textContent = '✏️ Edit';
@@ -726,7 +762,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
 
       menuBtn.addEventListener('click', (event)=>{
         event.stopPropagation();
-        toggleCardMenu(menu);
+        toggleCardMenu(menu, menuBtn);
       });
 
       li.addEventListener('click', (event)=>{
