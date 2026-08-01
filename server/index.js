@@ -507,12 +507,17 @@ app.post('/api/me/reset', authMiddleware, async (req,res)=>{
         return res.status(429).json({ error: `You can only reset your progress once every ${RESET_COOLDOWN_DAYS} days. Try again in ${daysLeft} day${daysLeft===1?'':'s'}.` });
       }
     }
-    const commits = await dbAll('SELECT id FROM commitments WHERE user_id = ?', [req.user.id]);
+    // Excludes joint commitments even when the resetter happens to be the
+    // one who created it -- a joint commitment's history/streak belongs to
+    // both people, and "reset MY progress" wiping shared data as a side
+    // effect (which the other person would then pull down on their next
+    // sync) is not what either person asked for.
+    const commits = await dbAll("SELECT id FROM commitments WHERE user_id = ? AND scope != 'joint'", [req.user.id]);
     for(const c of commits){
       await dbRun('DELETE FROM completion_log WHERE commitment_id = ?', [c.id]);
     }
     await dbRun(
-      'UPDATE commitments SET streak = 0, doneToday = 0, lastDone = NULL, achieved = 0, achievedAt = NULL, lastReminderSent = NULL WHERE user_id = ?',
+      "UPDATE commitments SET streak = 0, doneToday = 0, lastDone = NULL, achieved = 0, achievedAt = NULL, lastReminderSent = NULL WHERE user_id = ? AND scope != 'joint'",
       [req.user.id]
     );
     await dbRun('UPDATE users SET xp = 0, lastProgressReset = ? WHERE id = ?', [new Date().toISOString(), req.user.id]);

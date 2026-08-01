@@ -1344,6 +1344,11 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     }
     if(debugLivesAnna) debugLivesAnna.value = state.lives.anna;
     if(debugLivesJordan) debugLivesJordan.value = state.lives.jordan;
+    // Only your own lives are actually settable from here -- the other
+    // field is read-only display, since a change here can never reach the
+    // other person's phone anyway (lives aren't synced).
+    if(debugLivesAnna) debugLivesAnna.readOnly = currentUser !== 'anna';
+    if(debugLivesJordan) debugLivesJordan.readOnly = currentUser !== 'jordan';
   }
 
   function toggleDebugPanel(show){
@@ -1401,10 +1406,11 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   if(btnDebugSetLives){
     btnDebugSetLives.addEventListener('click', ()=>{
       ensureLifeState();
-      const a = parseInt(debugLivesAnna.value, 10);
-      const j = parseInt(debugLivesJordan.value, 10);
-      if(!Number.isNaN(a)) state.lives.anna = Math.min(MAX_LIVES, Math.max(0, a));
-      if(!Number.isNaN(j)) state.lives.jordan = Math.min(MAX_LIVES, Math.max(0, j));
+      // Only ever writes currentUser's own lives -- see updateDebugToolsDisplay
+      // for why the other field is read-only.
+      const ownInput = currentUser === 'anna' ? debugLivesAnna : debugLivesJordan;
+      const val = parseInt(ownInput.value, 10);
+      if(!Number.isNaN(val)) state.lives[currentUser] = Math.min(MAX_LIVES, Math.max(0, val));
       save(state);
       renderLives();
       toggleDebugPanel(true);
