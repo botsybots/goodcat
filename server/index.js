@@ -14,6 +14,15 @@ app.use(express.json());
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 
+// This app is built for exactly two people. Registration used to be open to
+// anyone who found the URL, and every authenticated endpoint returned both
+// people's full data to whoever asked -- so a stranger registering an
+// account (which already happened; see db.js's stray-account cleanup) could
+// read everything. Locking both the sign-up form AND every authenticated
+// request to this allow-list closes that regardless of what's already in
+// the database.
+const ALLOWED_USERNAMES = ['anna', 'jordan'];
+
 // VAPID keys for web-push
 let VAPID_PUBLIC = process.env.VAPID_PUBLIC;
 let VAPID_PRIVATE = process.env.VAPID_PRIVATE;
@@ -37,6 +46,11 @@ function authMiddleware(req,res,next){
   const token = parts[1];
   try{
     const payload = jwt.verify(token, JWT_SECRET);
+    // Blocks any account outside the allow-list immediately, even one with
+    // a still-valid token issued before this check existed.
+    if(!ALLOWED_USERNAMES.includes((payload.name || '').toLowerCase())){
+      return res.status(403).json({ error: 'This app is private to Anna and Jordan.' });
+    }
     req.user = payload;
     next();
   }catch(e){
@@ -54,10 +68,14 @@ app.get('/api/health', (req,res)=>{
 app.post('/api/register', async (req, res) => {
   const { name, password } = req.body;
   if(!name || !password) return res.status(400).json({ error: 'name and password required' });
+  const normalizedName = name.trim().toLowerCase();
+  if(!ALLOWED_USERNAMES.includes(normalizedName)){
+    return res.status(403).json({ error: 'Registration is limited to Anna and Jordan.' });
+  }
   try{
     const hash = await bcrypt.hash(password, 10);
-    const result = await dbRun('INSERT INTO users (name,password) VALUES (?,?)', [name, hash]);
-    const user = { id: result.lastID, name };
+    const result = await dbRun('INSERT INTO users (name,password) VALUES (?,?)', [normalizedName, hash]);
+    const user = { id: result.lastID, name: normalizedName };
     res.json({ token: sign(user), user });
   }catch(e){
     res.status(400).json({ error: 'user exists or db error' });
@@ -104,7 +122,7 @@ app.post('/api/login', async (req,res)=>{
   const { name, password } = req.body;
   if(!name || !password) return res.status(400).json({ error: 'name and password required' });
   try{
-    const row = await dbGet('SELECT * FROM users WHERE name = ?', [name]);
+    const row = await dbGet('SELECT * FROM users WHERE LOWER(name) = ?', [name.trim().toLowerCase()]);
     if(!row) return res.status(400).json({ error: 'invalid credentials' });
     const ok = await bcrypt.compare(password, row.password);
     if(!ok) return res.status(400).json({ error: 'invalid credentials' });
@@ -148,6 +166,7 @@ app.get('/api/commitments', authMiddleware, async (req,res)=>{
              c.label, c.target, c.achieved, c.achievedAt, c.createdAt, c.user_id as ownerId, u.name as ownerName
       FROM commitments c
       JOIN users u ON u.id = c.user_id
+      WHERE LOWER(u.name) IN ('anna','jordan')
     `);
 
     const result = await Promise.all(rows.map(async r => {

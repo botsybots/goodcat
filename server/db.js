@@ -144,6 +144,27 @@ async function migrate() {
     FOREIGN KEY(from_user_id) REFERENCES users(id),
     FOREIGN KEY(to_user_id) REFERENCES users(id)
   )`);
+
+  // One-time cleanup: registration used to be open to anyone, so a handful
+  // of stranger/bot accounts registered before that was locked down (e.g.
+  // "__deploytest__"). This app is exactly Anna and Jordan -- remove any
+  // account that isn't one of them, along with everything it owns. Child
+  // rows first since foreign keys are enforced.
+  const strayUsers = await dbAll("SELECT id FROM users WHERE LOWER(name) NOT IN ('anna','jordan')");
+  for (const u of strayUsers) {
+    const strayCommits = await dbAll('SELECT id FROM commitments WHERE user_id = ?', [u.id]);
+    for (const c of strayCommits) {
+      await dbRun('DELETE FROM completion_log WHERE commitment_id = ?', [c.id]);
+      await dbRun('DELETE FROM paw_log WHERE commitment_id = ?', [c.id]);
+      await dbRun('DELETE FROM comments WHERE commitment_id = ?', [c.id]);
+    }
+    await dbRun('DELETE FROM commitments WHERE user_id = ?', [u.id]);
+    await dbRun('DELETE FROM paw_log WHERE giver_user_id = ?', [u.id]);
+    await dbRun('DELETE FROM comments WHERE user_id = ?', [u.id]);
+    await dbRun('DELETE FROM push_subscriptions WHERE user_id = ?', [u.id]);
+    await dbRun('DELETE FROM commitment_suggestions WHERE from_user_id = ? OR to_user_id = ?', [u.id, u.id]);
+    await dbRun('DELETE FROM users WHERE id = ?', [u.id]);
+  }
 }
 
 await migrate();
