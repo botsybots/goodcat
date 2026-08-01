@@ -93,6 +93,25 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   const addButton = document.getElementById('addButton');
   const addModal = document.getElementById('addModal');
   const addClose = document.getElementById('addClose');
+  const detailModal = document.getElementById('detailModal');
+  const detailClose = document.getElementById('detailClose');
+  const detailBody = document.getElementById('detailBody');
+  const wizardModal = document.getElementById('wizardModal');
+  const wizClose = document.getElementById('wizClose');
+  const wizProgress = document.getElementById('wizProgress');
+  const wizStep1 = document.getElementById('wizStep1');
+  const wizStep2 = document.getElementById('wizStep2');
+  const wizStep3 = document.getElementById('wizStep3');
+  const wizStep4 = document.getElementById('wizStep4');
+  const wizLabelGrid = document.getElementById('wizLabelGrid');
+  const wizText = document.getElementById('wizText');
+  const wizSchedule = document.getElementById('wizSchedule');
+  const wizCustomDays = document.getElementById('wizCustomDays');
+  const wizJoint = document.getElementById('wizJoint');
+  const wizStartDate = document.getElementById('wizStartDate');
+  const wizSummary = document.getElementById('wizSummary');
+  const wizBack = document.getElementById('wizBack');
+  const wizNext = document.getElementById('wizNext');
   const loginStatus = document.getElementById('loginStatus');
   const authGate = document.getElementById('authGate');
   const authGateStatus = document.getElementById('authGateStatus');
@@ -670,38 +689,13 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     }
   }
 
-  // Overflow ("...") menus: only one open at a time, closed by clicking
-  // anywhere outside a menu/menu-button, or automatically whenever the list
-  // re-renders (every state-changing action calls renderList()).
-  function closeAllCardMenus(){
-    document.querySelectorAll('.card-menu:not(.hidden)').forEach(m => m.classList.add('hidden'));
-    document.querySelectorAll('.card-menu-btn[aria-expanded="true"]').forEach(b => b.setAttribute('aria-expanded', 'false'));
-  }
-
-  function toggleCardMenu(menuEl, btnEl){
-    const isHidden = menuEl.classList.contains('hidden');
-    closeAllCardMenus();
-    if(isHidden){
-      menuEl.classList.remove('hidden');
-      if(btnEl) btnEl.setAttribute('aria-expanded', 'true');
-    }
-  }
-
-  // Escape closes an open menu and returns focus to the button that opened
-  // it, so keyboard users aren't left with focus stranded on a hidden menu.
+  // Escape closes whichever panel-modal is currently open (detail view,
+  // wizard, settings, etc.) -- generic rather than tied to any one modal,
+  // since any of them can be the one open at a given moment.
   document.addEventListener('keydown', e => {
     if(e.key !== 'Escape') return;
-    const openMenu = document.querySelector('.card-menu:not(.hidden)');
-    if(!openMenu) return;
-    const btn = document.querySelector(`.card-menu-btn[aria-controls="${openMenu.id}"]`);
-    closeAllCardMenus();
-    if(btn) btn.focus();
-  });
-
-  document.addEventListener('click', (e)=>{
-    if(!e.target.closest('.card-menu') && !e.target.closest('.card-menu-btn')){
-      closeAllCardMenus();
-    }
+    const open = document.querySelector('.panel-modal:not(.hidden)');
+    if(open) open.classList.add('hidden');
   });
 
   // Pushes one commitment's current fields to the server: creates it if it
@@ -834,19 +828,8 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     showToast('Paw sent!', `${userName(fromUserId)} cheered on “${c.text}”.`);
   }
 
-  // Comments mirror the same source-of-truth split as paws: server-backed
-  // once synced (c.lastComment), plain local array otherwise.
-  function lastCommentFor(c){
-    if(c.lastComment !== undefined) return c.lastComment;
-    if(Array.isArray(c.comments) && c.comments.length){
-      const text = c.comments[c.comments.length - 1];
-      return typeof text === 'string' ? { text, by: null } : text;
-    }
-    return null;
-  }
-
-  async function addComment(c, fromUserId){
-    const text = (prompt('Leave a note on "' + c.text + '"') || '').trim();
+  async function addComment(c, fromUserId, providedText){
+    const text = (providedText || '').trim();
     if(!text) return;
     if(isRemoteMode() && c.remoteId){
       try{
@@ -863,6 +846,19 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     save(state);
     renderList();
     showToast('Meow sent!', `${userName(fromUserId)} left a note.`);
+  }
+
+  // Full comment thread -- the endpoint already existed for this, it just
+  // was never actually shown anywhere; cards only ever displayed the single
+  // latest comment as a preview.
+  async function fetchCommentThread(c){
+    if(isRemoteMode() && c.remoteId){
+      try{
+        const res = await fetch(apiBase() + '/api/commitments/' + c.remoteId + '/comments', { headers: { authorization: 'Bearer '+authToken } });
+        if(res.ok) return await res.json();
+      }catch(e){ /* fall through to local */ }
+    }
+    return (c.comments || []).map(t => (typeof t === 'string' ? { text: t, by: null, at: null } : t));
   }
 
   // A row of the last 7 days (today included) so a habit's recent pattern
@@ -903,7 +899,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
       targetList.innerHTML = '<li class="empty-state small muted">Nothing here yet. Tap + and give the Good Cat something to keep an eye on.</li>';
       return;
     }
-    visible.forEach(c => targetList.appendChild(buildCommitCard(c)));
+    visible.forEach(c => targetList.appendChild(buildHeadlineCard(c)));
   }
 
   function renderJointCommitments(){
@@ -912,201 +908,240 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     const visible = state.commitments.filter(c => c.for === 'both');
     jointSection.classList.toggle('hidden', visible.length === 0);
     if(visible.length === 0) return;
-    visible.forEach(c => commitListJoint.appendChild(buildCommitCard(c)));
+    visible.forEach(c => commitListJoint.appendChild(buildHeadlineCard(c)));
   }
 
-  function buildCommitCard(c){
-      c.history = c.history || [];
-      updateCommitStatusFromHistory(c);
-      const li = document.createElement('li');
-      li.className = 'commit-card';
-      li.classList.toggle('is-done', !!c.doneToday);
-      li.classList.toggle('is-paused', !c.enabled);
+  function commitBadgesHtml(c){
+    const notStartedYet = c.createdAt && c.createdAt > appToday();
+    return [
+      c.for === 'both' ? '<span class="joint-badge">🤝 Together</span>' : '',
+      !c.enabled ? '<span class="paused-badge">Paused</span>' : '',
+      notStartedYet ? `<span class="paused-badge">Starts ${escapeHtml(c.createdAt)}</span>` : '',
+      c.label ? `<span class="label-badge">${LABEL_ICONS[c.label] || ''} ${escapeHtml(c.label)}</span>` : '',
+      c.achieved ? '<span class="achieved-badge">Achieved</span>' : ''
+    ].filter(Boolean).join(' ');
+  }
 
-      const owned = canEditCommit(c);
-      const topRow = document.createElement('div'); topRow.className = 'card-top-row';
-      // The status icon doubles as the keyboard-accessible way to toggle
-      // done: tap-anywhere-on-card (below) covers mouse/touch, but a card's
-      // own aria-label would otherwise have to summarize (and thus hide from
-      // screen readers) all the rich content elsewhere on it -- badges,
-      // schedule, progress, paw chip, comments. A small labeled button keeps
-      // that content readable while still giving keyboard/AT users a real
-      // control. Not owned -> purely decorative, nothing to operate here.
-      const icon = document.createElement(owned ? 'button' : 'div');
-      icon.className = 'card-status-icon';
-      icon.textContent = c.achieved ? '🏆' : c.doneToday ? '✅' : (LABEL_ICONS[c.label] || '📌');
-      if(owned){
-        icon.type = 'button';
-        icon.setAttribute('aria-pressed', c.doneToday ? 'true' : 'false');
-        icon.setAttribute('aria-label', c.doneToday ? `Mark "${c.text}" not done` : `Mark "${c.text}" done`);
-        icon.addEventListener('click', (e)=>{ e.stopPropagation(); toggleCommitDone(c); });
-      } else {
-        icon.setAttribute('aria-hidden', 'true');
-      }
+  // Compact "glance" row for the dashboard list -- name, badges, and a mini
+  // week-strip so the recent pattern is visible without opening anything.
+  // No tap-to-toggle here: tapping opens the detail view instead, where
+  // marking done is a dedicated, deliberate button rather than something
+  // any stray tap on the list can trigger.
+  function buildHeadlineCard(c){
+    c.history = c.history || [];
+    updateCommitStatusFromHistory(c);
+    const li = document.createElement('li');
+    li.className = 'commit-headline';
+    li.classList.toggle('is-done', !!c.doneToday);
+    li.classList.toggle('is-paused', !c.enabled);
 
-      const body = document.createElement('div'); body.className='card-body';
-      const notStartedYet = c.createdAt && c.createdAt > appToday();
-      const badgesHtml = [
-        c.for === 'both' ? '<span class="joint-badge">🤝 Together</span>' : '',
-        !c.enabled ? '<span class="paused-badge">Paused</span>' : '',
-        notStartedYet ? `<span class="paused-badge">Starts ${escapeHtml(c.createdAt)}</span>` : '',
-        c.label ? `<span class="label-badge">${LABEL_ICONS[c.label] || ''} ${escapeHtml(c.label)}</span>` : '',
-        c.achieved ? '<span class="achieved-badge">Achieved</span>' : ''
-      ].filter(Boolean).join(' ');
-      body.innerHTML = `
-        <strong class="card-name">${escapeHtml(c.text)}</strong>
-        ${badgesHtml ? `<div class="card-badges">${badgesHtml}</div>` : ''}
-        <div class="card-meta">${getScheduleDescription(c)}</div>
-      `;
+    const icon = document.createElement('div');
+    icon.className = 'card-status-icon';
+    icon.textContent = c.achieved ? '🏆' : c.doneToday ? '✅' : (LABEL_ICONS[c.label] || '📌');
+    icon.setAttribute('aria-hidden', 'true');
 
-      const sideActions = document.createElement('div'); sideActions.className = 'card-side-actions';
-      const canPaw = c.for !== currentUser && c.for !== 'both';
-      if(canPaw){
-        const pawBtn = document.createElement('button');
-        pawBtn.type = 'button';
-        pawBtn.className = 'paw-button';
-        const alreadyPawed = hasPawedToday(c);
-        pawBtn.textContent = '🐾';
-        pawBtn.disabled = alreadyPawed;
-        pawBtn.title = alreadyPawed ? 'Already pawed today' : `Send ${userName(c.for)} a paw`;
-        pawBtn.setAttribute('aria-label', pawBtn.title);
-        pawBtn.addEventListener('click', ()=> givePaw(c, currentUser));
-        sideActions.appendChild(pawBtn);
-      }
-      const menuBtn = document.createElement('button');
-      menuBtn.type = 'button';
-      menuBtn.className = 'card-menu-btn';
-      menuBtn.setAttribute('aria-label', `More actions for "${c.text}"`);
-      menuBtn.setAttribute('aria-haspopup', 'true');
-      menuBtn.setAttribute('aria-expanded', 'false');
-      const menuId = 'card-menu-' + c.id;
-      menuBtn.setAttribute('aria-controls', menuId);
-      menuBtn.textContent = '⋯';
-      sideActions.appendChild(menuBtn);
+    const body = document.createElement('div'); body.className = 'headline-body';
+    const badgesHtml = commitBadgesHtml(c);
+    body.innerHTML = `
+      <strong class="card-name">${escapeHtml(c.text)}</strong>
+      ${badgesHtml ? `<div class="card-badges">${badgesHtml}</div>` : ''}
+    `;
 
-      topRow.appendChild(icon);
-      topRow.appendChild(body);
-      topRow.appendChild(sideActions);
-      li.appendChild(topRow);
+    const miniStrip = buildWeekStrip(c);
+    miniStrip.classList.add('mini');
 
-      li.appendChild(buildWeekStrip(c));
+    const chevron = document.createElement('div');
+    chevron.className = 'headline-chevron';
+    chevron.textContent = '›';
+    chevron.setAttribute('aria-hidden', 'true');
 
-      if(c.target){
-        const progress = document.createElement('div'); progress.className = 'card-progress';
-        const percent = Math.min(100, Math.round(((c.streak||0) / c.target) * 100));
-        progress.innerHTML = `<div class="progress-bar"><div class="progress-fill" style="width:${percent}%"></div></div><div class="progress-text">${c.streak||0} / ${c.target} days (${percent}%)</div>`;
-        li.appendChild(progress);
-      }
-      // weekly progress for N-times-per-week schedules
-      if(c.weeklyTarget){
-        const weeklyCount = countCompletionsThisWeek(c, getEffectiveNow());
-        const wPercent = Math.min(100, Math.round((weeklyCount / c.weeklyTarget) * 100));
-        const wp = document.createElement('div'); wp.className='weekly-progress';
-        wp.innerHTML = `<div class="weekly-meta">This week: <strong>${weeklyCount}</strong> / ${c.weeklyTarget}</div><div class="weekly-bar"><div class="weekly-fill" style="width:${wPercent}%"></div></div>`;
-        li.appendChild(wp);
-      }
+    li.appendChild(icon);
+    li.appendChild(body);
+    li.appendChild(miniStrip);
+    li.appendChild(chevron);
 
-      const pawCount = pawCountFor(c);
-      if(pawCount > 0){
-        const lastPaw = lastPawFor(c);
-        const pawChip = document.createElement('div'); pawChip.className = 'paw-chip';
-        pawChip.textContent = lastPaw && lastPaw.by ? `🐾 ${pawCount} · last from ${userName(lastPaw.by.toLowerCase ? lastPaw.by.toLowerCase() : lastPaw.by)}` : `🐾 ${pawCount}`;
-        li.appendChild(pawChip);
-      }
+    li.setAttribute('role', 'button');
+    li.setAttribute('tabindex', '0');
+    li.setAttribute('aria-label', `Open details for "${c.text}"`);
+    li.addEventListener('click', ()=> openCommitDetail(c));
+    li.addEventListener('keydown', (e)=>{
+      if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); openCommitDetail(c); }
+    });
 
-      const lastComment = lastCommentFor(c);
-      if(lastComment){
-        const commentPreview = document.createElement('div');
-        commentPreview.className = 'comment-preview';
-        const byName = lastComment.by ? userName(lastComment.by.toLowerCase ? lastComment.by.toLowerCase() : lastComment.by) : null;
-        commentPreview.textContent = byName ? `Latest meow from ${byName}: ${lastComment.text}` : `Latest meow: ${lastComment.text}`;
-        li.appendChild(commentPreview);
-      }
+    return li;
+  }
 
-      // Overflow menu: Edit/Reminder/Delete are owner-only once logged in;
-      // History and Comment are open to both, since viewing/encouraging is
-      // the whole point of the other person seeing your habits.
-      const menu = document.createElement('div'); menu.className = 'card-menu hidden'; menu.id = menuId;
+  // The full picture for one commitment -- everything that used to be
+  // spread across the always-expanded card plus the "..." menu now lives
+  // here instead: full week-strip, progress, the actual comment thread
+  // (not just a one-line preview), and every action as a visible button
+  // rather than a hidden dropdown.
+  async function openCommitDetail(c){
+    const owned = canEditCommit(c);
+    const canPaw = c.for !== currentUser && c.for !== 'both';
+    const badgesHtml = commitBadgesHtml(c);
 
-      if(owned){
-        const editBtn = document.createElement('button'); editBtn.type='button'; editBtn.className='menu-item'; editBtn.textContent = '✏️ Edit';
-        editBtn.addEventListener('click', ()=>{ closeAllCardMenus(); openEditCommit(c); });
-        menu.appendChild(editBtn);
+    detailBody.innerHTML = `
+      <div class="detail-header">
+        <div class="detail-icon">${c.achieved ? '🏆' : c.doneToday ? '✅' : (LABEL_ICONS[c.label] || '📌')}</div>
+        <div>
+          <h2 class="detail-name">${escapeHtml(c.text)}</h2>
+          ${badgesHtml ? `<div class="card-badges">${badgesHtml}</div>` : ''}
+          <div class="card-meta">${getScheduleDescription(c)}</div>
+        </div>
+      </div>
+    `;
 
-        // Pausing keeps the commitment and its history, it just stops it
-        // counting toward streaks/lives and marks it "Paused" until resumed --
-        // the quick way to do that without opening the full edit form.
-        const pauseBtn = document.createElement('button'); pauseBtn.type='button'; pauseBtn.className='menu-item';
-        pauseBtn.textContent = c.enabled ? '⏸ Pause' : '▶️ Resume';
-        pauseBtn.addEventListener('click', ()=>{
-          closeAllCardMenus();
-          c.enabled = !c.enabled;
-          save(state);
-          pushCommitmentToServer(c);
-          renderList();
-        });
-        menu.appendChild(pauseBtn);
-
-        const reminderRow = document.createElement('div'); reminderRow.className = 'menu-item menu-reminder';
-        const reminderToggle = document.createElement('label'); reminderToggle.className = 'toggle-switch small';
-        reminderToggle.innerHTML = `<input type="checkbox" ${c.reminderEnabled ? 'checked':''}/><span class="toggle-slider"></span><span class="toggle-label">Reminder</span>`;
-        const reminderCheckbox = reminderToggle.querySelector('input');
-        const reminderTimeInput = document.createElement('input');
-        reminderTimeInput.type = 'time';
-        reminderTimeInput.className = 'menu-reminder-time';
-        reminderTimeInput.value = c.reminderTime || '';
-        function saveReminder(){
-          c.reminderEnabled = reminderCheckbox.checked;
-          c.reminderTime = reminderTimeInput.value || null;
-          save(state);
-          scheduleReminderFor(c);
-          pushCommitmentToServer(c);
-          renderList();
-        }
-        reminderCheckbox.addEventListener('change', saveReminder);
-        reminderTimeInput.addEventListener('change', saveReminder);
-        reminderRow.appendChild(reminderToggle);
-        reminderRow.appendChild(reminderTimeInput);
-        menu.appendChild(reminderRow);
-      }
-
-      const histBtn = document.createElement('button'); histBtn.type='button'; histBtn.className='menu-item'; histBtn.textContent='📅 History';
-      histBtn.addEventListener('click', ()=>{ closeAllCardMenus(); showHistory(c); });
-      menu.appendChild(histBtn);
-
-      const commentBtn = document.createElement('button'); commentBtn.type='button'; commentBtn.className='menu-item'; commentBtn.textContent='💬 Add a comment';
-      commentBtn.addEventListener('click', ()=>{ closeAllCardMenus(); addComment(c, currentUser); });
-      menu.appendChild(commentBtn);
-
-      if(owned){
-        const del = document.createElement('button'); del.type='button'; del.className='menu-item danger'; del.textContent='🗑 Delete';
-        del.addEventListener('click', ()=>{
-          closeAllCardMenus();
-          if(!confirm(`Delete “${c.text}”? This cannot be undone.`)) return;
-          deleteCommitmentFromServer(c);
-          state.commitments = state.commitments.filter(x=>x.id!==c.id);
-          save(state);
-          renderList();
-        });
-        menu.appendChild(del);
-      }
-      // Anchored to the side-actions row (right where the ⋯ button lives),
-      // not the card as a whole -- so it opens right under the button
-      // instead of below all the card's content (week-strip, progress bars,
-      // etc.), which could put it a long way from the button on a tall card.
-      sideActions.appendChild(menu);
-
-      menuBtn.addEventListener('click', (event)=>{
-        event.stopPropagation();
-        toggleCardMenu(menu, menuBtn);
-      });
-
-      li.addEventListener('click', (event)=>{
-        if(event.target.closest('.card-side-actions') || event.target.closest('.card-menu')) return;
+    if(owned){
+      const markBtn = document.createElement('button');
+      markBtn.type = 'button';
+      markBtn.className = 'detail-mark-btn' + (c.doneToday ? ' is-done' : '');
+      markBtn.textContent = c.doneToday ? '✅ Marked done today — tap to undo' : 'Mark done for today';
+      markBtn.addEventListener('click', ()=>{
         toggleCommitDone(c);
+        openCommitDetail(c);
       });
-      return li;
+      detailBody.appendChild(markBtn);
+    }
+
+    detailBody.appendChild(buildWeekStrip(c));
+
+    if(c.target){
+      const progress = document.createElement('div'); progress.className = 'card-progress';
+      const percent = Math.min(100, Math.round(((c.streak||0) / c.target) * 100));
+      progress.innerHTML = `<div class="progress-bar"><div class="progress-fill" style="width:${percent}%"></div></div><div class="progress-text">${c.streak||0} / ${c.target} days (${percent}%)</div>`;
+      detailBody.appendChild(progress);
+    }
+    if(c.weeklyTarget){
+      const weeklyCount = countCompletionsThisWeek(c, getEffectiveNow());
+      const wPercent = Math.min(100, Math.round((weeklyCount / c.weeklyTarget) * 100));
+      const wp = document.createElement('div'); wp.className = 'weekly-progress';
+      wp.innerHTML = `<div class="weekly-meta">This week: <strong>${weeklyCount}</strong> / ${c.weeklyTarget}</div><div class="weekly-bar"><div class="weekly-fill" style="width:${wPercent}%"></div></div>`;
+      detailBody.appendChild(wp);
+    }
+
+    if(owned){
+      const reminderRow = document.createElement('div'); reminderRow.className = 'menu-item menu-reminder detail-reminder-row';
+      const reminderToggle = document.createElement('label'); reminderToggle.className = 'toggle-switch small';
+      reminderToggle.innerHTML = `<input type="checkbox" ${c.reminderEnabled ? 'checked':''}/><span class="toggle-slider"></span><span class="toggle-label">Reminder</span>`;
+      const reminderCheckbox = reminderToggle.querySelector('input');
+      const reminderTimeInput = document.createElement('input');
+      reminderTimeInput.type = 'time';
+      reminderTimeInput.className = 'menu-reminder-time';
+      reminderTimeInput.value = c.reminderTime || '';
+      function saveReminder(){
+        c.reminderEnabled = reminderCheckbox.checked;
+        c.reminderTime = reminderTimeInput.value || null;
+        save(state);
+        scheduleReminderFor(c);
+        pushCommitmentToServer(c);
+      }
+      reminderCheckbox.addEventListener('change', saveReminder);
+      reminderTimeInput.addEventListener('change', saveReminder);
+      reminderRow.appendChild(reminderToggle);
+      reminderRow.appendChild(reminderTimeInput);
+      detailBody.appendChild(reminderRow);
+    }
+
+    if(canPaw){
+      const pawBtn = document.createElement('button');
+      pawBtn.type = 'button';
+      pawBtn.className = 'paw-button';
+      const alreadyPawed = hasPawedToday(c);
+      pawBtn.textContent = '🐾';
+      pawBtn.disabled = alreadyPawed;
+      pawBtn.title = alreadyPawed ? 'Already pawed today' : `Send ${userName(c.for)} a paw`;
+      pawBtn.setAttribute('aria-label', pawBtn.title);
+      pawBtn.addEventListener('click', ()=>{ givePaw(c, currentUser); openCommitDetail(c); });
+      detailBody.appendChild(pawBtn);
+    }
+    const pawCount = pawCountFor(c);
+    if(pawCount > 0){
+      const lastPaw = lastPawFor(c);
+      const pawChip = document.createElement('div'); pawChip.className = 'paw-chip';
+      pawChip.textContent = lastPaw && lastPaw.by ? `🐾 ${pawCount} · last from ${userName(lastPaw.by.toLowerCase ? lastPaw.by.toLowerCase() : lastPaw.by)}` : `🐾 ${pawCount}`;
+      detailBody.appendChild(pawChip);
+    }
+
+    const actions = document.createElement('div'); actions.className = 'detail-actions';
+    if(owned){
+      const editBtn = document.createElement('button'); editBtn.type='button'; editBtn.className='detail-action-btn'; editBtn.textContent='✏️ Edit';
+      editBtn.addEventListener('click', ()=>{ detailModal.classList.add('hidden'); openEditCommit(c); });
+      actions.appendChild(editBtn);
+
+      const pauseBtn = document.createElement('button'); pauseBtn.type='button'; pauseBtn.className='detail-action-btn';
+      pauseBtn.textContent = c.enabled ? '⏸ Pause' : '▶️ Resume';
+      pauseBtn.addEventListener('click', ()=>{
+        c.enabled = !c.enabled;
+        save(state);
+        pushCommitmentToServer(c);
+        renderList();
+        openCommitDetail(c);
+      });
+      actions.appendChild(pauseBtn);
+    }
+
+    const histBtn = document.createElement('button'); histBtn.type='button'; histBtn.className='detail-action-btn'; histBtn.textContent='📅 History';
+    histBtn.addEventListener('click', ()=> showHistory(c));
+    actions.appendChild(histBtn);
+
+    if(owned){
+      const delBtn = document.createElement('button'); delBtn.type='button'; delBtn.className='detail-action-btn danger'; delBtn.textContent='🗑 Delete';
+      delBtn.addEventListener('click', ()=>{
+        if(!confirm(`Delete "${c.text}"? This cannot be undone.`)) return;
+        deleteCommitmentFromServer(c);
+        state.commitments = state.commitments.filter(x=>x.id!==c.id);
+        save(state);
+        renderList();
+        detailModal.classList.add('hidden');
+      });
+      actions.appendChild(delBtn);
+    }
+    detailBody.appendChild(actions);
+
+    const commentsSection = document.createElement('div'); commentsSection.className = 'detail-comments';
+    commentsSection.innerHTML = `
+      <h3>💬 Comments</h3>
+      <div id="detailCommentThread" class="comment-thread"><p class="small muted">Loading…</p></div>
+      <div class="detail-reply-row">
+        <input id="detailReplyInput" placeholder="Leave a note..." />
+        <button type="button" id="detailReplySend">Send</button>
+      </div>
+    `;
+    detailBody.appendChild(commentsSection);
+
+    detailModal.classList.remove('hidden');
+
+    // Wired up before the (awaited) thread fetch below, not after -- typing
+    // and hitting Send fast enough to land before that fetch resolves used
+    // to click a button with no listener on it yet, silently doing nothing.
+    const replyInput = document.getElementById('detailReplyInput');
+    const replySend = document.getElementById('detailReplySend');
+    if(replySend && replyInput){
+      const sendReply = async ()=>{
+        const text = replyInput.value.trim();
+        if(!text) return;
+        await addComment(c, currentUser, text);
+        openCommitDetail(c);
+      };
+      replySend.addEventListener('click', sendReply);
+      replyInput.addEventListener('keydown', e => { if(e.key === 'Enter'){ e.preventDefault(); sendReply(); } });
+    }
+
+    const thread = await fetchCommentThread(c);
+    const threadEl = document.getElementById('detailCommentThread');
+    if(threadEl){
+      threadEl.innerHTML = thread.length ? '' : '<p class="small muted">No comments yet.</p>';
+      thread.forEach(entry => {
+        const item = document.createElement('div'); item.className = 'comment-item';
+        const byName = entry.by ? (userName(entry.by.toLowerCase ? entry.by.toLowerCase() : entry.by)) : null;
+        const when = entry.at ? new Date(entry.at).toLocaleString() : '';
+        item.innerHTML = `<div class="comment-meta">${byName ? escapeHtml(byName) : 'You'}${when ? ' · ' + escapeHtml(when) : ''}</div><p>${escapeHtml(entry.text)}</p>`;
+        threadEl.appendChild(item);
+      });
+    }
   }
+
 
   function renderList(){
     updateLivesForUser('anna');
@@ -1494,9 +1529,114 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     if(submitBtn) submitBtn.textContent = 'Add Commitment';
   }
 
-  addButton.addEventListener('click', ()=>{ clearAddForm(); addModal.classList.remove('hidden'); });
+  // The "+" button now opens the guided wizard (below) rather than this
+  // form directly -- this modal is reached only via Edit from now on.
   addClose.addEventListener('click', ()=>{ addModal.classList.add('hidden'); clearAddForm(); });
   addModal.addEventListener('click', e => { if(e.target === addModal){ addModal.classList.add('hidden'); clearAddForm(); } });
+
+  // --- Guided Add Commitment wizard: label first (per Jordan's request),
+  // then name, then schedule, then joint/start-date as a final step, one
+  // question per screen instead of one dense form. ---
+  let wizardStep = 1;
+  const WIZARD_TOTAL_STEPS = 4;
+  const wizardSteps = [wizStep1, wizStep2, wizStep3, wizStep4];
+
+  function wizardCustomDaysSelected(){
+    return Array.from(wizCustomDays.querySelectorAll('input[name="wizDay"]:checked')).map(i=>i.value);
+  }
+
+  function wizardUpdateSummary(){
+    const selectedTile = wizLabelGrid.querySelector('.label-tile.selected');
+    const label = selectedTile ? selectedTile.dataset.label : '';
+    const text = wizText.value.trim() || '(untitled)';
+    const scheduleDesc = getScheduleDescription({ schedule: wizSchedule.value, scheduleDays: wizardCustomDaysSelected() });
+    wizSummary.innerHTML = `
+      <p class="card-name">${escapeHtml(text)}</p>
+      <p class="small muted">${label ? (LABEL_ICONS[label] || '') + ' ' + escapeHtml(label) + ' · ' : ''}${scheduleDesc}</p>
+    `;
+  }
+
+  function wizardShowStep(n){
+    wizardStep = n;
+    wizardSteps.forEach((el, i) => el.classList.toggle('hidden', i !== n - 1));
+    wizProgress.textContent = `Step ${n} of ${WIZARD_TOTAL_STEPS}`;
+    wizBack.style.visibility = n === 1 ? 'hidden' : 'visible';
+    wizNext.textContent = n === WIZARD_TOTAL_STEPS ? 'Add Commitment' : 'Next';
+    if(n === WIZARD_TOTAL_STEPS) wizardUpdateSummary();
+    if(n === 2) wizText.focus();
+  }
+
+  function wizardReset(){
+    wizText.value = '';
+    wizSchedule.value = 'daily';
+    wizCustomDays.style.display = 'none';
+    wizCustomDays.querySelectorAll('input[name="wizDay"]').forEach(i => i.checked = false);
+    wizLabelGrid.querySelectorAll('.label-tile').forEach(t => t.classList.remove('selected'));
+    wizJoint.checked = false;
+    wizStartDate.value = '';
+    wizStartDate.min = appToday();
+    wizardShowStep(1);
+  }
+
+  wizLabelGrid.querySelectorAll('.label-tile').forEach(tile => {
+    tile.addEventListener('click', ()=>{
+      wizLabelGrid.querySelectorAll('.label-tile').forEach(t => t.classList.remove('selected'));
+      tile.classList.add('selected');
+      wizardShowStep(2);
+    });
+  });
+
+  wizSchedule.addEventListener('change', ()=>{
+    wizCustomDays.style.display = wizSchedule.value === 'custom' ? 'block' : 'none';
+  });
+
+  wizBack.addEventListener('click', ()=>{
+    if(wizardStep > 1) wizardShowStep(wizardStep - 1);
+  });
+
+  function wizardSubmit(){
+    const text = wizText.value.trim();
+    if(!text) return;
+    const selectedTile = wizLabelGrid.querySelector('.label-tile.selected');
+    const label = selectedTile ? (selectedTile.dataset.label || null) : null;
+    const forUser = wizJoint.checked ? 'both' : currentUser;
+    const schedule = wizSchedule.value || 'daily';
+    let scheduleDays = null;
+    if(schedule === 'custom'){
+      scheduleDays = wizardCustomDaysSelected();
+      if(scheduleDays.length === 0){ alert('Select at least one day for a custom schedule'); wizardShowStep(3); return; }
+    }
+    const startDate = wizStartDate.value || null;
+    const weeklyTarget = schedule === 'twice' ? 2 : (schedule === 'three' ? 3 : (schedule === 'four' ? 4 : null));
+
+    const commitItem = {
+      id: uid(), text, for: forUser, enabled: true, doneToday: false, schedule, scheduleDays,
+      streak: 0, lastDone: null, remoteId: null, history: [], label, target: null,
+      reminderEnabled: false, reminderTime: null, paws: 0, comments: [], weeklyTarget,
+      createdAt: startDate || appToday()
+    };
+    state.commitments.push(commitItem);
+    scheduleReminderFor(commitItem);
+    save(state);
+    renderList();
+    wizardModal.classList.add('hidden');
+    wizardReset();
+    if(commitItem.for === currentUser || commitItem.for === 'both') pushCommitmentToServer(commitItem);
+  }
+
+  wizNext.addEventListener('click', ()=>{
+    if(wizardStep === 2 && !wizText.value.trim()){ alert('Give it a name first.'); return; }
+    if(wizardStep === 3 && wizSchedule.value === 'custom' && wizardCustomDaysSelected().length === 0){
+      alert('Select at least one day for a custom schedule.');
+      return;
+    }
+    if(wizardStep < WIZARD_TOTAL_STEPS) wizardShowStep(wizardStep + 1);
+    else wizardSubmit();
+  });
+
+  addButton.addEventListener('click', ()=>{ wizardReset(); wizardModal.classList.remove('hidden'); });
+  wizClose.addEventListener('click', ()=>{ wizardModal.classList.add('hidden'); wizardReset(); });
+  wizardModal.addEventListener('click', e => { if(e.target === wizardModal){ wizardModal.classList.add('hidden'); wizardReset(); } });
 
   // --- Suggestions: propose a commitment for your partner, who can accept
   // it as-is, tweak it first ("amend"), or reject it. ---
@@ -1669,6 +1809,9 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   });
   leaderboardClose.addEventListener('click', ()=> leaderboardModal.classList.add('hidden'));
   leaderboardModal.addEventListener('click', e => { if(e.target === leaderboardModal) leaderboardModal.classList.add('hidden'); });
+
+  detailClose.addEventListener('click', ()=> detailModal.classList.add('hidden'));
+  detailModal.addEventListener('click', e => { if(e.target === detailModal) detailModal.classList.add('hidden'); });
 
   // --- Reset my progress: for trying the app out and wanting a clean
   // slate. Wipes server-side streak/history/XP for the caller's own

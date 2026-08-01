@@ -163,6 +163,77 @@
         <textarea id="debugState" readonly></textarea>
       </div>
 
+      <div id="wizardModal" class="panel-modal hidden">
+        <div class="panel-content">
+          <button id="wizClose" class="close-btn" aria-label="Close add commitment">✕</button>
+          <h2>Add Commitment</h2>
+          <p class="wizard-progress" id="wizProgress">Step 1 of 4</p>
+
+          <div class="wizard-step" id="wizStep1">
+            <p class="wizard-question">What's this about?</p>
+            <div class="label-grid" id="wizLabelGrid">
+              <button type="button" class="label-tile" data-label="">No label</button>
+              <button type="button" class="label-tile" data-label="Health">🩺 Health</button>
+              <button type="button" class="label-tile" data-label="Fitness">💪 Fitness</button>
+              <button type="button" class="label-tile" data-label="Education">📚 Education</button>
+              <button type="button" class="label-tile" data-label="Home">🏠 Home</button>
+              <button type="button" class="label-tile" data-label="Money">💰 Money</button>
+              <button type="button" class="label-tile" data-label="Social">🎉 Social</button>
+              <button type="button" class="label-tile" data-label="Relationship">💞 Relationship</button>
+            </div>
+          </div>
+
+          <div class="wizard-step hidden" id="wizStep2">
+            <p class="wizard-question">What do you want to commit to?</p>
+            <input id="wizText" class="full-width" placeholder="e.g. Take medication" />
+          </div>
+
+          <div class="wizard-step hidden" id="wizStep3">
+            <p class="wizard-question">How often?</p>
+            <select id="wizSchedule" class="full-width">
+              <option value="daily">Daily</option>
+              <option value="weekdays">Weekdays (Mon–Fri)</option>
+              <option value="twice">Twice a week</option>
+              <option value="three">Three times a week</option>
+              <option value="four">Four times a week</option>
+              <option value="custom">Custom</option>
+            </select>
+            <div id="wizCustomDays" style="display:none;" class="custom-days full-width">
+              <label class="small muted">Select days</label>
+              <div class="days">
+                <label><input type="checkbox" name="wizDay" value="mon"/><span>Mon</span></label>
+                <label><input type="checkbox" name="wizDay" value="tue"/><span>Tue</span></label>
+                <label><input type="checkbox" name="wizDay" value="wed"/><span>Wed</span></label>
+                <label><input type="checkbox" name="wizDay" value="thu"/><span>Thu</span></label>
+                <label><input type="checkbox" name="wizDay" value="fri"/><span>Fri</span></label>
+                <label><input type="checkbox" name="wizDay" value="sat"/><span>Sat</span></label>
+                <label><input type="checkbox" name="wizDay" value="sun"/><span>Sun</span></label>
+              </div>
+            </div>
+          </div>
+
+          <div class="wizard-step hidden" id="wizStep4">
+            <p class="wizard-question">Anything else?</p>
+            <label class="toggle-switch small full-width"><input type="checkbox" id="wizJoint" /><span class="toggle-slider"></span><span class="toggle-label">🤝 Joint (shared by both of you)</span></label>
+            <label class="full-width small muted" for="wizStartDate">Start on (optional — leave blank to start today)</label>
+            <input id="wizStartDate" class="small-input" type="date" />
+            <div class="wizard-summary" id="wizSummary"></div>
+          </div>
+
+          <div class="wizard-nav">
+            <button type="button" id="wizBack" class="small">Back</button>
+            <button type="button" id="wizNext">Next</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="detailModal" class="panel-modal hidden">
+        <div class="panel-content">
+          <button id="detailClose" class="close-btn" aria-label="Close">✕</button>
+          <div id="detailBody"></div>
+        </div>
+      </div>
+
       <div id="addModal" class="panel-modal hidden">
         <div class="panel-content">
           <button id="addClose" class="close-btn" aria-label="Close add commitment">✕</button>
@@ -209,7 +280,7 @@
             <label class="toggle-switch small" style="display:none"><input type="checkbox" id="commitEnabled" checked /><span class="toggle-slider"></span><span class="toggle-label">Enabled</span></label>
             <button type="submit" class="full-width">Add Commitment</button>
           </form>
-          <p class="small muted">You can add a reminder time or pause a commitment later from its ⋯ menu.</p>
+          <p class="small muted">You can add a reminder time or pause a commitment from its detail view too -- tap it from the dashboard.</p>
         </div>
       </div>
 

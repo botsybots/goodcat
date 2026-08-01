@@ -260,6 +260,8 @@ main.user-columns {
 
 .panel-content {
   width: min(540px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
   background: var(--paper);
   border: 1px solid var(--border);
   border-radius: var(--radius-panel);
@@ -475,6 +477,55 @@ ul {
   color: var(--muted);
 }
 
+/* Dashboard row: name + badges + a glance at the week, nothing else --
+   tap it to open the full detail view instead of every field always being
+   on screen. Deliberately does NOT toggle done on tap (that used to live
+   here and was too easy to trigger by accident); marking done is now a
+   dedicated button inside the detail view. */
+.commit-headline {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius-card);
+  background: var(--paper);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  margin-bottom: 10px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.commit-headline:hover,
+.commit-headline:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.commit-headline.is-done {
+  background: var(--secondary-soft);
+  border-color: var(--secondary);
+}
+
+.commit-headline.is-paused {
+  opacity: 0.6;
+}
+
+.headline-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.headline-chevron {
+  flex-shrink: 0;
+  font-size: 1.4rem;
+  color: var(--muted);
+  line-height: 1;
+}
+
 .commit-card {
   position: relative;
   padding: 16px;
@@ -618,47 +669,6 @@ ul {
   font-weight: 700;
 }
 
-.card-menu-btn {
-  min-width: 44px;
-  min-height: 44px;
-  padding: 0;
-  display: grid;
-  place-items: center;
-  background: var(--paper-dim);
-  color: var(--muted);
-  font-size: 1.3rem;
-  font-weight: 700;
-  border: 1px solid var(--border);
-  box-shadow: none;
-  line-height: 1;
-}
-
-.card-menu-btn:hover {
-  background: var(--border);
-  transform: none;
-  box-shadow: none;
-}
-
-.card-menu {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  margin-top: 8px;
-  z-index: 6;
-  display: grid;
-  gap: 2px;
-  min-width: 210px;
-  padding: 6px;
-  border-radius: var(--radius-btn);
-  background: var(--paper);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-lift);
-}
-
-.card-menu.hidden {
-  display: none;
-}
-
 .menu-item {
   width: 100%;
   text-align: left;
@@ -757,15 +767,29 @@ button.menu-item:hover {
   box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
-.comment-preview {
-  margin-top: 8px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: var(--paper-dim);
-  color: var(--ink);
-  font-size: 0.9rem;
-  line-height: 1.4;
-  border: 1px dashed var(--border);
+/* Compact version used on dashboard headline rows: same complete/missed/
+   off states as the full strip, just shrunk to dots with no day letters
+   or date numbers -- a glance at the recent pattern, not the detail. */
+.week-strip.mini {
+  flex: 0 0 auto;
+  width: auto;
+  gap: 4px;
+  margin: 0;
+}
+
+.week-strip.mini .week-day-label,
+.week-strip.mini .week-day-circle {
+  font-size: 0;
+}
+
+.week-strip.mini .week-day-circle {
+  width: 8px;
+  height: 8px;
+  border-width: 1px;
+}
+
+.week-strip.mini .week-day.is-today .week-day-circle {
+  box-shadow: 0 0 0 1.5px var(--accent-soft);
 }
 
 .progress-bar {
@@ -1312,4 +1336,203 @@ footer {
   color: var(--secondary-dark);
   font-weight: 700;
   font-size: 0.9rem;
+}
+
+/* --- Detail view: everything about one commitment in one place --- */
+
+.detail-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.detail-icon {
+  flex-shrink: 0;
+  width: 50px;
+  height: 50px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.4rem;
+  background: var(--paper-dim);
+  border: 1px solid var(--border);
+}
+
+.detail-name {
+  margin: 0 0 6px;
+  font-size: 1.25rem;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+.detail-mark-btn {
+  width: 100%;
+  padding: 16px;
+  margin-bottom: 16px;
+  font-size: 1.05rem;
+  font-weight: 800;
+  background: var(--accent);
+  border-color: var(--accent-dark);
+  color: #fff8ef;
+}
+
+.detail-mark-btn:hover {
+  background: var(--accent-dark);
+}
+
+.detail-mark-btn.is-done {
+  background: var(--secondary-soft);
+  border-color: var(--secondary);
+  color: var(--secondary-dark);
+}
+
+.detail-mark-btn.is-done:hover {
+  background: var(--secondary);
+  color: #fff;
+}
+
+.detail-reminder-row {
+  margin: 14px 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-btn);
+  background: var(--paper-dim);
+}
+
+.detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.detail-action-btn {
+  flex: 1 1 auto;
+  min-width: 100px;
+  padding: 11px 12px;
+  font-size: 0.92rem;
+}
+
+.detail-action-btn.danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.detail-comments {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.detail-comments h3 {
+  margin: 0 0 10px;
+  font-size: 1rem;
+}
+
+.comment-thread {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.comment-item {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--paper-dim);
+}
+
+.comment-item p {
+  margin: 2px 0 0;
+  line-height: 1.4;
+}
+
+.comment-meta {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.detail-reply-row {
+  display: flex;
+  gap: 8px;
+}
+
+.detail-reply-row input {
+  flex: 1 1 auto;
+}
+
+.detail-reply-row button {
+  flex-shrink: 0;
+}
+
+/* --- Guided Add Commitment wizard --- */
+
+.wizard-progress {
+  margin: -8px 0 18px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.wizard-step.hidden {
+  display: none;
+}
+
+.wizard-question {
+  margin: 0 0 16px;
+  font-size: 1.15rem;
+  font-weight: 800;
+}
+
+.label-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.label-tile {
+  padding: 16px 10px;
+  font-size: 0.98rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.label-tile.selected {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-dark);
+}
+
+.wizard-summary {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border-radius: var(--radius-card);
+  background: var(--paper-dim);
+}
+
+.wizard-summary .card-name {
+  font-weight: 800;
+}
+
+.wizard-nav {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+.wizard-nav #wizNext {
+  flex: 1 1 auto;
+  background: var(--accent);
+  border-color: var(--accent-dark);
+  color: #fff8ef;
+}
+
+.wizard-nav #wizNext:hover {
+  background: var(--accent-dark);
 }
