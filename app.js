@@ -573,6 +573,24 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
     }
   }
 
+  // Sweeps every ALREADY-recorded loss for a user and refunds any that no
+  // longer hold up against current data -- the general-purpose version of
+  // reevaluatePastDay(), run automatically on every sync rather than only
+  // when someone manually backfills a specific day. This exists because
+  // fixing the stale-cache race in updateLivesForUser() only stops NEW false
+  // losses; it does nothing for one that already got permanently recorded
+  // before that fix shipped (or from the rarer case that fix doesn't cover --
+  // the other person's own device being slow to push). Safe to run
+  // repeatedly: a genuinely still-missing day simply won't pass the
+  // compliance check and stays exactly as recorded.
+  function reconcileStaleLifeLosses(userId){
+    ensureLifeState();
+    const dayKeys = Object.keys(state.lifeLosses[userId] || {});
+    const weekKeys = Object.keys(state.weeklyLifeLosses[userId] || {});
+    const allDays = new Set([...dayKeys, ...weekKeys]);
+    allDays.forEach(dayIso => reevaluatePastDayForOneUser(userId, dayIso));
+  }
+
   function getWindowDates(endDate, windowSize = 7){
     const dates = [];
     let cursor = parseLocalDate(endDate);
@@ -1921,6 +1939,12 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
       checkAllTrackerMilestones();
       await syncTrackerXp();
       hasSyncedThisPageLoad = true;
+      // Now that we have fresh, trustworthy data, sweep for and refund any
+      // previously-recorded loss that no longer holds up against it -- see
+      // reconcileStaleLifeLosses()'s comment for why this is still needed
+      // even with the stale-cache race itself fixed.
+      reconcileStaleLifeLosses('anna');
+      reconcileStaleLifeLosses('jordan');
       save(state);
       renderList();
       fetchUsersXp();
