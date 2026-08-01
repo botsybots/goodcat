@@ -141,6 +141,17 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, getSchedule
   const leaderboardBody = document.getElementById('leaderboardBody');
   const celebrationOverlay = document.getElementById('celebrationOverlay');
   const celebrationText = document.getElementById('celebrationText');
+  const tabCommitments = document.getElementById('tabCommitments');
+  const tabTodos = document.getElementById('tabTodos');
+  const commitmentsView = document.getElementById('commitmentsView');
+  const todosView = document.getElementById('todosView');
+  const wellbeingSection = document.getElementById('wellbeingSection');
+  const wellbeingIcon = document.getElementById('wellbeingIcon');
+  const wellbeingQuestion = document.getElementById('wellbeingQuestion');
+  const todoAddForm = document.getElementById('todoAddForm');
+  const todoInput = document.getElementById('todoInput');
+  const todoList = document.getElementById('todoList');
+  const todosLoggedOutHint = document.getElementById('todosLoggedOutHint');
   const START_LIVES = 9;
   const MAX_LIVES = 9;
   const RESET_LIVES_AFTER_COUNCIL = 3;
@@ -243,6 +254,22 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, getSchedule
     customDays.style.display = commitSchedule.value === 'custom' ? 'block' : 'none';
     if(commitDeadlineRow) commitDeadlineRow.style.display = commitSchedule.value === 'deadline' ? 'block' : 'none';
   });
+
+  // Top-level tab switch between the commitments dashboard and the shared
+  // to-do list -- not persisted across reloads, since it's a quick glance
+  // switch rather than a durable preference.
+  function switchTab(tab){
+    const onTodos = tab === 'todos';
+    tabCommitments.classList.toggle('active', !onTodos);
+    tabTodos.classList.toggle('active', onTodos);
+    tabCommitments.setAttribute('aria-selected', String(!onTodos));
+    tabTodos.setAttribute('aria-selected', String(onTodos));
+    commitmentsView.classList.toggle('hidden', onTodos);
+    todosView.classList.toggle('hidden', !onTodos);
+    if(onTodos) fetchTodos();
+  }
+  tabCommitments.addEventListener('click', ()=> switchTab('commitments'));
+  tabTodos.addEventListener('click', ()=> switchTab('todos'));
 
   function urlBase64ToUint8Array(base64String) {
     const padding = '='.repeat((4 - base64String.length % 4) % 4);
@@ -1345,6 +1372,9 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, getSchedule
       if(authGate) authGate.classList.remove('hidden');
       lockIdentityControls(false);
       if(syncIntervalId){ clearInterval(syncIntervalId); syncIntervalId = null; }
+      wellbeingCategory = null;
+      renderWellbeingPrompt();
+      fetchTodos();
     }
   }
 
@@ -1462,6 +1492,152 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, getSchedule
     }catch(e){ /* non-critical */ }
   }
 
+  // --- Wellbeing check-in: a rotating, once-every-couple-of-weeks prompt
+  // about one category at a time. The server owns the rotation/cooldown; the
+  // client just asks whether one is due and shows it if so. ---
+  const WELLBEING_QUESTIONS = {
+    Health: "How's your health been feeling lately?",
+    Fitness: 'How are your energy levels?',
+    Education: "How's learning/growth been feeling?",
+    Home: "How's home feeling — on top of things, or behind?",
+    Money: 'How are you feeling about money right now?',
+    Social: "How's your social life been feeling?",
+    Relationship: "How's us been feeling lately?"
+  };
+  let wellbeingCategory = null;
+
+  async function fetchWellbeingPrompt(){
+    if(!authToken) return;
+    try{
+      const res = await fetch(apiBase() + '/api/wellbeing/prompt', { headers: { authorization: 'Bearer '+authToken } });
+      if(!res.ok) return;
+      const j = await res.json();
+      wellbeingCategory = j.due ? j.category : null;
+      renderWellbeingPrompt();
+    }catch(e){ /* non-critical */ }
+  }
+
+  function renderWellbeingPrompt(){
+    if(!wellbeingSection) return;
+    if(!wellbeingCategory){ wellbeingSection.classList.add('hidden'); return; }
+    wellbeingIcon.textContent = LABEL_ICONS[wellbeingCategory] || '🐾';
+    wellbeingQuestion.textContent = WELLBEING_QUESTIONS[wellbeingCategory] || `How's ${wellbeingCategory} been feeling?`;
+    wellbeingSection.classList.remove('hidden');
+  }
+
+  wellbeingSection.querySelectorAll('.wellbeing-btn').forEach(btn => {
+    btn.addEventListener('click', async ()=>{
+      const rating = btn.dataset.rating;
+      const category = wellbeingCategory;
+      if(!category) return;
+      try{
+        const res = await fetch(apiBase() + '/api/wellbeing/respond', { method: 'POST', headers: { 'content-type':'application/json', authorization: 'Bearer '+authToken }, body: JSON.stringify({ rating }) });
+        if(!res.ok) return;
+      }catch(e){ return; }
+      wellbeingCategory = null;
+      renderWellbeingPrompt();
+      if(rating === 'low' && confirm(`Want to add a commitment for ${category}?`)){
+        wizardReset();
+        const tile = Array.from(wizLabelGrid.querySelectorAll('.label-tile')).find(t => t.dataset.label === category);
+        if(tile){ tile.classList.add('selected'); wizardShowStep(2); }
+        wizardModal.classList.remove('hidden');
+      }
+    });
+  });
+
+  // --- Shared to-do list ---
+  async function fetchTodos(){
+    if(!authToken){
+      state.todos = [];
+      renderTodos();
+      return;
+    }
+    try{
+      const res = await fetch(apiBase() + '/api/todos', { headers: { authorization: 'Bearer '+authToken } });
+      if(!res.ok) return;
+      state.todos = await res.json();
+      renderTodos();
+    }catch(e){ /* non-critical */ }
+  }
+
+  function renderTodos(){
+    if(!todoList) return;
+    const loggedOut = !authToken;
+    if(todosLoggedOutHint) todosLoggedOutHint.classList.toggle('hidden', !loggedOut);
+    if(todoAddForm) todoAddForm.classList.toggle('hidden', loggedOut);
+    const todos = state.todos || [];
+    todoList.innerHTML = '';
+    if(loggedOut) return;
+    if(todos.length === 0){
+      todoList.innerHTML = '<li class="empty-state small muted">Nothing on the list yet.</li>';
+      return;
+    }
+    todos.forEach(t => {
+      const li = document.createElement('li');
+      li.className = 'todo-item' + (t.done ? ' is-done' : '');
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.className = 'todo-checkbox';
+      checkbox.checked = !!t.done;
+      checkbox.setAttribute('aria-label', `Mark "${t.text}" ${t.done ? 'not done' : 'done'}`);
+      checkbox.addEventListener('change', ()=> toggleTodo(t, checkbox.checked));
+      const text = document.createElement('span');
+      text.className = 'todo-text';
+      text.textContent = t.text;
+      const meta = document.createElement('span');
+      meta.className = 'todo-meta small muted';
+      meta.textContent = t.createdByName ? `added by ${t.createdByName}` : '';
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'todo-delete-btn';
+      delBtn.textContent = '🗑';
+      delBtn.setAttribute('aria-label', `Remove "${t.text}"`);
+      delBtn.addEventListener('click', ()=> deleteTodo(t));
+      li.appendChild(checkbox);
+      li.appendChild(text);
+      li.appendChild(meta);
+      li.appendChild(delBtn);
+      todoList.appendChild(li);
+    });
+  }
+
+  async function addTodo(text){
+    if(!authToken) return;
+    try{
+      const res = await fetch(apiBase() + '/api/todos', { method: 'POST', headers: { 'content-type':'application/json', authorization: 'Bearer '+authToken }, body: JSON.stringify({ text }) });
+      if(!res.ok) return;
+      await fetchTodos();
+    }catch(e){ showToast('Offline?', 'Could not reach the server.'); }
+  }
+
+  async function toggleTodo(t, done){
+    if(!authToken) return;
+    t.done = done; // optimistic
+    renderTodos();
+    try{
+      await fetch(apiBase() + '/api/todos/' + t.id, { method: 'PUT', headers: { 'content-type':'application/json', authorization: 'Bearer '+authToken }, body: JSON.stringify({ done }) });
+      await fetchTodos();
+    }catch(e){ showToast('Offline?', 'Could not reach the server.'); }
+  }
+
+  async function deleteTodo(t){
+    if(!authToken) return;
+    try{
+      await fetch(apiBase() + '/api/todos/' + t.id, { method: 'DELETE', headers: { authorization: 'Bearer '+authToken } });
+      await fetchTodos();
+    }catch(e){ showToast('Offline?', 'Could not reach the server.'); }
+  }
+
+  if(todoAddForm){
+    todoAddForm.addEventListener('submit', e => {
+      e.preventDefault();
+      const text = todoInput.value.trim();
+      if(!text) return;
+      addTodo(text);
+      todoInput.value = '';
+    });
+  }
+
   async function runSync(){
     if(!authToken) return;
     try{
@@ -1478,6 +1654,8 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, getSchedule
       renderList();
       fetchUsersXp();
       fetchSuggestions();
+      fetchWellbeingPrompt();
+      fetchTodos();
     }catch(e){ console.error('sync failed', e); }
   }
 

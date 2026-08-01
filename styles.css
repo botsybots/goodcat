@@ -1261,6 +1261,204 @@ footer {
   color: var(--danger);
 }
 
+/* Top-level tab switch between the commitments dashboard and the shared
+   to-do list. */
+.tab-bar {
+  display: flex;
+  gap: 6px;
+  margin-top: 18px;
+  padding: 4px;
+  background: var(--paper-dim);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+}
+
+.tab-button {
+  flex: 1 1 auto;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 0.88rem;
+  padding: 9px 10px;
+  border-radius: var(--radius-chip);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.tab-button.active {
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+}
+
+#todosView.hidden,
+#commitmentsView.hidden {
+  display: none;
+}
+
+/* Rotating wellbeing check-in -- a quiet prompt above the dashboard, not a
+   modal, since it's optional and low-stakes. */
+.wellbeing-card {
+  background: var(--secondary-soft);
+  border: 1px solid var(--secondary);
+  border-radius: var(--radius-card);
+  padding: 16px 18px;
+  margin-top: 20px;
+}
+
+.wellbeing-card.hidden {
+  display: none;
+}
+
+.wellbeing-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.wellbeing-icon {
+  font-size: 1.4rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.wellbeing-eyebrow {
+  margin: 0 0 2px 0;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--secondary-dark);
+}
+
+.wellbeing-question {
+  margin: 0;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.wellbeing-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.wellbeing-btn {
+  border: 1px solid var(--secondary);
+  background: var(--paper);
+  color: var(--secondary-dark);
+  border-radius: var(--radius-btn);
+  padding: 8px 14px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.wellbeing-btn:hover {
+  background: var(--secondary);
+  color: #fff;
+}
+
+/* Shared to-do list -- a plain checklist, not a card-per-item like
+   commitments, since there's no schedule/streak/history to show. */
+.todos-panel {
+  margin-top: 20px;
+}
+
+.todo-add-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.todo-add-row.hidden {
+  display: none;
+}
+
+#todosLoggedOutHint.hidden {
+  display: none;
+}
+
+.todo-add-row input {
+  flex: 1 1 auto;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-btn);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 0.95rem;
+}
+
+.todo-add-row button {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  border-radius: var(--radius-btn);
+  padding: 0 16px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.todo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.todo-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.todo-item:last-child {
+  border-bottom: none;
+}
+
+.todo-checkbox {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  accent-color: var(--secondary);
+}
+
+.todo-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: break-word;
+  color: var(--ink);
+}
+
+.todo-item.is-done .todo-text {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.todo-meta {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.todo-delete-btn {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.95rem;
+  padding: 4px;
+  opacity: 0.7;
+}
+
+.todo-delete-btn:hover {
+  opacity: 1;
+}
+
 /* Big celebratory moment on completing a habit -- deliberately louder than
    the small corner toast used for everything else. */
 .celebration-overlay {

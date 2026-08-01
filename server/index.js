@@ -596,6 +596,101 @@ app.get('/api/leaderboard/weekly', authMiddleware, async (req,res)=>{
   }
 });
 
+// --- Wellbeing check-in: a short, rotating prompt (one category at a time,
+// cycling through LABEL_CATEGORIES) roughly every two weeks per person. ---
+const WELLBEING_INTERVAL_DAYS = 14;
+
+app.get('/api/wellbeing/prompt', authMiddleware, async (req,res)=>{
+  try{
+    const row = await dbGet('SELECT lastWellbeingCheckDate, wellbeingCategoryIndex FROM users WHERE id = ?', [req.user.id]);
+    const last = row ? row.lastWellbeingCheckDate : null;
+    let due = true;
+    if(last){
+      const daysSince = (Date.now() - new Date(last).getTime()) / (1000*60*60*24);
+      due = daysSince >= WELLBEING_INTERVAL_DAYS;
+    }
+    const index = ((row && row.wellbeingCategoryIndex) || 0) % LABEL_CATEGORIES.length;
+    res.json({ due, category: due ? LABEL_CATEGORIES[index] : null });
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
+});
+
+app.post('/api/wellbeing/respond', authMiddleware, async (req,res)=>{
+  const { rating } = req.body;
+  if(!['low','okay','good'].includes(rating)) return res.status(400).json({ error: 'rating must be low, okay, or good' });
+  try{
+    const row = await dbGet('SELECT lastWellbeingCheckDate, wellbeingCategoryIndex FROM users WHERE id = ?', [req.user.id]);
+    const last = row ? row.lastWellbeingCheckDate : null;
+    // Recompute "due" server side rather than trusting the client -- stops
+    // the rotation from being advanced more than once per interval by a
+    // stray or repeated request.
+    let due = true;
+    if(last){
+      const daysSince = (Date.now() - new Date(last).getTime()) / (1000*60*60*24);
+      due = daysSince >= WELLBEING_INTERVAL_DAYS;
+    }
+    if(!due) return res.status(429).json({ error: 'No check-in due right now.' });
+    const index = ((row && row.wellbeingCategoryIndex) || 0) % LABEL_CATEGORIES.length;
+    const category = LABEL_CATEGORIES[index];
+    const nextIndex = (index + 1) % LABEL_CATEGORIES.length;
+    await dbRun('UPDATE users SET lastWellbeingCheckDate = ?, wellbeingCategoryIndex = ? WHERE id = ?', [new Date().toISOString(), nextIndex, req.user.id]);
+    res.json({ success: true, category, rating });
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
+});
+
+// --- Shared to-do list: a single joint checklist, not per-person -- anyone
+// can add, check off, or delete any item. ---
+app.get('/api/todos', authMiddleware, async (req,res)=>{
+  try{
+    const rows = await dbAll(`
+      SELECT t.id, t.text, t.done, t.created_at as createdAt, t.done_at as doneAt, u.name as createdByName
+      FROM todos t JOIN users u ON u.id = t.created_by
+      ORDER BY t.done ASC, t.created_at ASC
+    `);
+    res.json(rows.map(r => ({ id: r.id, text: r.text, done: !!r.done, createdAt: r.createdAt, doneAt: r.doneAt, createdByName: r.createdByName })));
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
+});
+
+app.post('/api/todos', authMiddleware, async (req,res)=>{
+  const text = ((req.body && req.body.text) || '').trim();
+  if(!text) return res.status(400).json({ error: 'text required' });
+  try{
+    const result = await dbRun('INSERT INTO todos (text, done, created_by, created_at) VALUES (?,0,?,?)', [text, req.user.id, new Date().toISOString()]);
+    res.json({ id: result.lastID, text, done: false, createdAt: new Date().toISOString(), doneAt: null, createdByName: req.user.name });
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
+});
+
+app.put('/api/todos/:id', authMiddleware, async (req,res)=>{
+  const id = req.params.id;
+  const { done } = req.body;
+  try{
+    const existing = await dbGet('SELECT id FROM todos WHERE id = ?', [id]);
+    if(!existing) return res.status(404).json({ error: 'not found' });
+    const doneAt = done ? new Date().toISOString() : null;
+    await dbRun('UPDATE todos SET done = ?, done_at = ? WHERE id = ?', [done?1:0, doneAt, id]);
+    res.json({ success: true, doneAt });
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
+});
+
+app.delete('/api/todos/:id', authMiddleware, async (req,res)=>{
+  const id = req.params.id;
+  try{
+    await dbRun('DELETE FROM todos WHERE id = ?', [id]);
+    res.json({ success: true });
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
+});
+
 function shouldSendReminder(commit, now){
   if(!commit.reminderEnabled || !commit.reminderTime || !commit.enabled) return false;
   const todayKey = localDateKey(now);

@@ -45,6 +45,8 @@ async function migrate() {
   if (!userCols.includes('lastWeeklyCategoryCheck')) await dbRun('ALTER TABLE users ADD COLUMN lastWeeklyCategoryCheck TEXT');
   if (!userCols.includes('xp')) await dbRun('ALTER TABLE users ADD COLUMN xp INTEGER DEFAULT 0');
   if (!userCols.includes('lastProgressReset')) await dbRun('ALTER TABLE users ADD COLUMN lastProgressReset TEXT');
+  if (!userCols.includes('lastWellbeingCheckDate')) await dbRun('ALTER TABLE users ADD COLUMN lastWellbeingCheckDate TEXT');
+  if (!userCols.includes('wellbeingCategoryIndex')) await dbRun('ALTER TABLE users ADD COLUMN wellbeingCategoryIndex INTEGER DEFAULT 0');
 
   await dbRun(`CREATE TABLE IF NOT EXISTS commitments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -146,6 +148,19 @@ async function migrate() {
     FOREIGN KEY(to_user_id) REFERENCES users(id)
   )`);
 
+  // Shared checklist -- unlike commitments, a to-do belongs to both people
+  // at once rather than one owner; anyone can add, check off, or delete any
+  // item. No streak/schedule/history -- it's a one-time list, not a habit.
+  await dbRun(`CREATE TABLE IF NOT EXISTS todos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    text TEXT,
+    done INTEGER DEFAULT 0,
+    created_by INTEGER,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    done_at TEXT,
+    FOREIGN KEY(created_by) REFERENCES users(id)
+  )`);
+
   // One-time cleanup: registration used to be open to anyone, so a handful
   // of stranger/bot accounts registered before that was locked down (e.g.
   // "__deploytest__"). This app is exactly Anna and Jordan -- remove any
@@ -164,6 +179,7 @@ async function migrate() {
     await dbRun('DELETE FROM comments WHERE user_id = ?', [u.id]);
     await dbRun('DELETE FROM push_subscriptions WHERE user_id = ?', [u.id]);
     await dbRun('DELETE FROM commitment_suggestions WHERE from_user_id = ? OR to_user_id = ?', [u.id, u.id]);
+    await dbRun('DELETE FROM todos WHERE created_by = ?', [u.id]);
     await dbRun('DELETE FROM users WHERE id = ?', [u.id]);
   }
 }

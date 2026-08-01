@@ -38,52 +38,92 @@
         </div>
         <button id="settingsBtn" class="icon-button" aria-label="Open settings">⚙️</button>
         </header>
-      <section id="suggestionsSection" class="suggestions-section hidden">
-        <h3>💌 Suggested for you</h3>
-        <div id="suggestionsList"></div>
-      </section>
 
-      <section id="jointSection" class="user-panel joint-panel hidden">
-        <div class="panel-header">
-          <div>
-            <h2>🤝 Together</h2>
+      <nav class="tab-bar" role="tablist">
+        <button type="button" class="tab-button active" id="tabCommitments" role="tab" aria-selected="true">🐾 Commitments</button>
+        <button type="button" class="tab-button" id="tabTodos" role="tab" aria-selected="false">✅ To-dos</button>
+      </nav>
+
+      <div id="commitmentsView">
+        <section id="wellbeingSection" class="wellbeing-card hidden">
+          <div class="wellbeing-head">
+            <span class="wellbeing-icon" id="wellbeingIcon">🩺</span>
+            <div>
+              <p class="wellbeing-eyebrow">Quick check-in</p>
+              <p class="wellbeing-question" id="wellbeingQuestion"></p>
+            </div>
           </div>
-        </div>
-        <ul id="commitList-joint"></ul>
-      </section>
+          <div class="wellbeing-actions">
+            <button type="button" class="wellbeing-btn" data-rating="low">Struggling</button>
+            <button type="button" class="wellbeing-btn" data-rating="okay">Okay</button>
+            <button type="button" class="wellbeing-btn" data-rating="good">Doing well</button>
+          </div>
+        </section>
 
-      <main class="user-columns">
-        <section class="user-panel" id="section-anna">
+        <section id="suggestionsSection" class="suggestions-section hidden">
+          <h3>💌 Suggested for you</h3>
+          <div id="suggestionsList"></div>
+        </section>
+
+        <section id="jointSection" class="user-panel joint-panel hidden">
           <div class="panel-header">
             <div>
-              <h2>Anna</h2>
-              <p class="lives-badge">Lives <span id="lives-anna">9 / 9</span></p>
-              <p class="level-badge" id="level-anna"></p>
+              <h2>🤝 Together</h2>
             </div>
-            <div class="panel-header-actions" id="panel-actions-anna"></div>
           </div>
-          <div class="council-banner hidden" id="council-anna">
-            <p>Our Lord is calling a family council</p>
-            <button id="ack-anna" type="button">Acknowledge</button>
-          </div>
-          <ul id="commitList-anna"></ul>
+          <ul id="commitList-joint"></ul>
         </section>
-        <section class="user-panel" id="section-jordan">
+
+        <main class="user-columns">
+          <section class="user-panel" id="section-anna">
+            <div class="panel-header">
+              <div>
+                <h2>Anna</h2>
+                <p class="lives-badge">Lives <span id="lives-anna">9 / 9</span></p>
+                <p class="level-badge" id="level-anna"></p>
+              </div>
+              <div class="panel-header-actions" id="panel-actions-anna"></div>
+            </div>
+            <div class="council-banner hidden" id="council-anna">
+              <p>Our Lord is calling a family council</p>
+              <button id="ack-anna" type="button">Acknowledge</button>
+            </div>
+            <ul id="commitList-anna"></ul>
+          </section>
+          <section class="user-panel" id="section-jordan">
+            <div class="panel-header">
+              <div>
+                <h2>Jordan</h2>
+                <p class="lives-badge">Lives <span id="lives-jordan">9 / 9</span></p>
+                <p class="level-badge" id="level-jordan"></p>
+              </div>
+              <div class="panel-header-actions" id="panel-actions-jordan"></div>
+            </div>
+            <div class="council-banner hidden" id="council-jordan">
+              <p>Our Lord is calling a family council</p>
+              <button id="ack-jordan" type="button">Acknowledge</button>
+            </div>
+            <ul id="commitList-jordan"></ul>
+          </section>
+        </main>
+      </div>
+
+      <div id="todosView" class="hidden">
+        <section class="user-panel todos-panel">
           <div class="panel-header">
             <div>
-              <h2>Jordan</h2>
-              <p class="lives-badge">Lives <span id="lives-jordan">9 / 9</span></p>
-              <p class="level-badge" id="level-jordan"></p>
+              <h2>🤝 Shared to-dos</h2>
+              <p class="small muted">One list, either of you can add, check off, or remove.</p>
             </div>
-            <div class="panel-header-actions" id="panel-actions-jordan"></div>
           </div>
-          <div class="council-banner hidden" id="council-jordan">
-            <p>Our Lord is calling a family council</p>
-            <button id="ack-jordan" type="button">Acknowledge</button>
-          </div>
-          <ul id="commitList-jordan"></ul>
+          <form id="todoAddForm" class="todo-add-row">
+            <input id="todoInput" placeholder="Add something to the list..." />
+            <button type="submit">Add</button>
+          </form>
+          <p id="todosLoggedOutHint" class="small muted hidden">Log in to use the shared to-do list.</p>
+          <ul id="todoList" class="todo-list"></ul>
         </section>
-      </main>
+      </div>
 
       <button id="addButton" class="fab" aria-label="Add commitment">+</button>
 
