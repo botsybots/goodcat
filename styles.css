@@ -195,9 +195,15 @@ main.user-columns {
   flex-shrink: 0;
 }
 
+/* Both of these deliberately sit below the generic `button` rule's 44px
+   accessibility min-height/min-width tap-target floor -- without the
+   override here, that min-height wins over the explicit 36px height below
+   (min-height always wins when larger), squashing the circle into an oval. */
 .collapse-toggle {
   width: 36px;
   height: 36px;
+  min-width: 0;
+  min-height: 0;
   padding: 0;
   border-radius: 50%;
   font-size: 1rem;
@@ -207,6 +213,8 @@ main.user-columns {
   position: static;
   width: 36px;
   height: 36px;
+  min-width: 0;
+  min-height: 0;
   padding: 0;
   border-radius: 50%;
   font-size: 1.4rem;
