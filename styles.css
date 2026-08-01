@@ -218,6 +218,20 @@ main.user-columns {
 .settings-group {
   display: grid;
   gap: 12px;
+  margin-top: 10px;
+}
+
+.settings-section-label {
+  margin-top: 24px;
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.settings-section-label:first-of-type {
   margin-top: 20px;
 }
 
@@ -968,15 +982,16 @@ button.menu-item:hover {
 
 .toast {
   position: fixed;
-  left: 18px;
-  bottom: 18px;
-  max-width: min(320px, calc(100vw - 36px));
+  left: 50%;
+  bottom: 20px;
+  max-width: min(280px, calc(100vw - 48px));
   background: var(--paper);
   border: 1px solid var(--border);
-  padding: 14px 16px;
+  padding: 12px 15px;
   border-radius: 10px;
   box-shadow: var(--shadow-lift);
-  transform: rotate(-1deg);
+  transform: translateX(-50%) rotate(-1deg);
+  transition: opacity 0.35s ease;
   z-index: 1000;
 }
 
@@ -1181,15 +1196,19 @@ footer {
 }
 
 .leaderboard-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
   padding: 12px 0;
   border-bottom: 1px solid var(--border);
 }
 
 .leaderboard-row:last-of-type {
   border-bottom: none;
+}
+
+.leaderboard-row-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
 }
 
 .leaderboard-name {
@@ -1199,6 +1218,25 @@ footer {
 .leaderboard-rate {
   color: var(--muted);
   font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.leaderboard-bar {
+  width: 100%;
+  height: 8px;
+  background: var(--paper-dim);
+  border-radius: var(--radius-chip);
+  overflow: hidden;
+}
+
+.leaderboard-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
+.leaderboard-fill.is-hit {
+  background: var(--secondary);
 }
 
 .leaderboard-banner {

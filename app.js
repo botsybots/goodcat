@@ -184,7 +184,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     const permission = supported ? Notification.permission : 'unsupported';
     notifyStatus.textContent = supported ? 'Permission: ' + permission : 'Not supported in this browser';
     if(!supported) return;
-    btnEnableNotify.textContent = permission === 'granted' ? '🔔 Notifications On' : 'Enable Notifications';
+    btnEnableNotify.textContent = permission === 'granted' ? '🔔 Notifications On' : '🔔 Enable Notifications';
   }
   updateNotifyStatus();
   settingsBtn.addEventListener('click', updateNotifyStatus);
@@ -233,7 +233,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     const t = document.createElement('div'); t.className='toast';
     t.innerHTML = `<h4>${escapeHtml(title)}</h4><p>${escapeHtml(body)}</p>`;
     document.body.appendChild(t);
-    setTimeout(()=>{ t.style.opacity='0'; setTimeout(()=>t.remove(),400); },7000);
+    setTimeout(()=>{ t.style.opacity='0'; setTimeout(()=>t.remove(),400); },4500);
   }
 
   function showSystemNotification(title, body){
@@ -1039,7 +1039,11 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
         });
         menu.appendChild(del);
       }
-      li.appendChild(menu);
+      // Anchored to the side-actions row (right where the ⋯ button lives),
+      // not the card as a whole -- so it opens right under the button
+      // instead of below all the card's content (week-strip, progress bars,
+      // etc.), which could put it a long way from the button on a tall card.
+      sideActions.appendChild(menu);
 
       menuBtn.addEventListener('click', (event)=>{
         event.stopPropagation();
@@ -1662,8 +1666,16 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     const names = Object.keys(users);
     let html = names.map(name => {
       const u = users[name];
-      const pct = u.rate === null ? '—' : Math.round(u.rate*100) + '%';
-      return `<div class="leaderboard-row"><span class="leaderboard-name">${escapeHtml(userName(name))}</span><span class="leaderboard-rate">${u.completed}/${u.scheduled} · ${pct}</span></div>`;
+      const pctNum = u.rate === null ? 0 : Math.round(u.rate*100);
+      const pctLabel = u.rate === null ? '—' : pctNum + '%';
+      return `
+        <div class="leaderboard-row">
+          <div class="leaderboard-row-head">
+            <span class="leaderboard-name">${escapeHtml(userName(name))}</span>
+            <span class="leaderboard-rate">${u.completed}/${u.scheduled} · ${pctLabel}</span>
+          </div>
+          <div class="leaderboard-bar"><div class="leaderboard-fill${u.hitTarget ? ' is-hit' : ''}" style="width:${Math.min(100,pctNum)}%"></div></div>
+        </div>`;
     }).join('');
     const bothHit = names.length === 2 && names.every(n => users[n].hitTarget);
     const soloWinners = names.filter(n => users[n].hitTarget && !bothHit);

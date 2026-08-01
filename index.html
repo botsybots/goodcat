@@ -93,25 +93,30 @@
         <div class="panel-content">
           <button id="settingsClose" class="close-btn" aria-label="Close settings">✕</button>
           <h2>Settings</h2>
+          <div class="settings-section-label">Account</div>
           <div class="settings-group">
             <div class="settings-actions">
               <button id="btnLogout" type="button" style="display:none">Logout</button>
               <button id="btnSync" type="button">Sync</button>
             </div>
+            <p id="loginStatus" class="small muted"></p>
           </div>
+
+          <div class="settings-section-label">Together</div>
           <div class="settings-group">
             <button id="btnSuggest" type="button">💌 Suggest a commitment</button>
             <button id="btnLeaderboard" type="button">🏆 Weekly leaderboard</button>
           </div>
+
+          <div class="settings-section-label">App</div>
           <div class="settings-group">
-            <button id="btnEnableNotify" type="button">Enable Notifications</button>
+            <button id="btnEnableNotify" type="button">🔔 Enable Notifications</button>
+            <p id="notifyStatus" class="small muted"></p>
             <button id="btnExportData" type="button" style="display:none">Export Backup</button>
             <button id="btnImportData" type="button" style="display:none">Import Backup</button>
             <input id="importFileInput" type="file" accept="application/json" style="display:none" />
             <button id="btnShowState" type="button">🛠 Debug Tools</button>
-            <p id="notifyStatus" class="small muted"></p>
           </div>
-          <p id="loginStatus" class="small muted"></p>
         </div>
       </div>
 
@@ -192,7 +197,7 @@
               <option value="Social">🎉 Social</option>
               <option value="Relationship">💞 Relationship</option>
             </select>
-            <label class="toggle-switch small full-width"><input type="checkbox" id="commitJoint" /><span class="toggle-slider"></span><span class="toggle-label">🤝 Joint commitment (shared by both of you)</span></label>
+            <label class="toggle-switch small full-width"><input type="checkbox" id="commitJoint" /><span class="toggle-slider"></span><span class="toggle-label">🤝 Joint (shared by both of you)</span></label>
             <input id="commitTarget" class="small-input" placeholder="Target streak days" type="number" min="1" style="display:none" />
             <label class="full-width small muted" for="commitStartDate">Start on (optional — leave blank to start today)</label>
             <input id="commitStartDate" class="small-input" type="date" />
