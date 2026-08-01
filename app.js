@@ -555,7 +555,16 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
         if(!state.lifeLosses[userId][dayKey]){
           state.lifeLosses[userId][dayKey] = true;
           state.lives[userId] = Math.max(0, state.lives[userId] - 1);
-          if(dayKey === yesterday || dayKey === today) showToast('Bots is judging you', `${userName(userId)} missed a scheduled habit — lost 1 life.`);
+          // This loop never evaluates "today" (see the `end = yesterday`
+          // bound above) -- by the time a day gets judged here it has
+          // already fully finished, so the toast says so explicitly rather
+          // than reading like a real-time judgment of a day still in
+          // progress. Also only ever shown on the device of the person it's
+          // actually about -- this function runs for BOTH people on every
+          // render (each device needs to display an approximation of the
+          // other's lives too), but a toast about someone else's missed
+          // habit popping up on your own phone was the actual bug reported.
+          if(userId === currentUser && dayKey === yesterday) showToast('Bots is judging you', `${userName(userId)} missed a scheduled habit yesterday — lost 1 life.`);
         }
       }
       // "N times a week" habits are only judged once, at the end of their
@@ -569,7 +578,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
           if(compliance.total > 0 && compliance.compliant < compliance.total){
             state.weeklyLifeLosses[userId][weekStartIso] = true;
             state.lives[userId] = Math.max(0, state.lives[userId] - 1);
-            if(dayKey === yesterday || dayKey === today) showToast('Bots is judging you', `${userName(userId)} missed a weekly target — lost 1 life.`);
+            if(userId === currentUser && dayKey === yesterday) showToast('Bots is judging you', `${userName(userId)} missed a weekly target last week — lost 1 life.`);
           }
         }
       }
@@ -595,8 +604,8 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
             // near full -- report what actually changed, not the raw
             // tier, and stay quiet if nothing did (already at max).
             const actualGain = state.lives[userId] - before;
-            if(actualGain > 0 && (dayKey === yesterday || dayKey === today)){
-              showToast('Loki is pleased with ' + userName(userId), `Kept up with scheduled habits — gained ${actualGain} ${actualGain === 1 ? 'life' : 'lives'}!`);
+            if(userId === currentUser && actualGain > 0 && dayKey === yesterday){
+              showToast('Loki is pleased with ' + userName(userId), `Kept up with scheduled habits this past week — gained ${actualGain} ${actualGain === 1 ? 'life' : 'lives'}!`);
             }
           }
         }
