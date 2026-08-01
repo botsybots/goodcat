@@ -197,6 +197,17 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
 
   let authToken = localStorage.getItem('accountability:token') || null;
   let syncIntervalId = null;
+  // On every page load, setToken() fires off runSync() without awaiting it,
+  // then execution falls straight through to the initial renderList() call
+  // below -- which runs on whatever was last cached in localStorage, before
+  // that sync's fetch has come back. updateLivesForUser() only ever judges
+  // a given day once (state.lifeLosses[userId][dayKey] latches permanently),
+  // so if that first, stale-data render judged a day as missed using
+  // out-of-date history for the OTHER person's commitments, the second
+  // render -- moments later, with the real synced data -- could never undo
+  // it. This flag makes updateLivesForUser() wait for the first successful
+  // sync of this page load before judging anything, in remote mode.
+  let hasSyncedThisPageLoad = false;
   if(authToken){
     const payload = decodeJwtPayload(authToken);
     if(payload) adoptIdentityFromLogin(payload);
@@ -534,6 +545,12 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
   }
 
   function updateLivesForUser(userId){
+    // See hasSyncedThisPageLoad's declaration -- judging a day before this
+    // device's own commitments (and, more importantly, the other person's)
+    // have actually finished syncing risks a permanent false judgment from
+    // stale data. In local-only/offline mode there's no other device's data
+    // to be stale about, so this never applies.
+    if(isRemoteMode() && !hasSyncedThisPageLoad) return;
     ensureLifeState();
     const today = appToday();
     const yesterday = prevLocalDate(today);
@@ -1560,6 +1577,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
       if(authGate) authGate.classList.remove('hidden');
       lockIdentityControls(false);
       if(syncIntervalId){ clearInterval(syncIntervalId); syncIntervalId = null; }
+      hasSyncedThisPageLoad = false;
       wellbeingCategory = null;
       renderWellbeingPrompt();
       fetchTodos();
@@ -1862,6 +1880,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
       state.commitments = state.commitments.filter(c => !c.remoteId || remoteIds.has(c.remoteId));
       checkAllTrackerMilestones();
       await syncTrackerXp();
+      hasSyncedThisPageLoad = true;
       save(state);
       renderList();
       fetchUsersXp();
