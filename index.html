@@ -238,6 +238,7 @@
               <option value="four">Four times a week</option>
               <option value="custom">Custom</option>
               <option value="deadline">One-off, due by a date</option>
+              <option value="tracker">Track time since last done</option>
             </select>
             <div id="wizCustomDays" style="display:none;" class="custom-days full-width">
               <label class="small muted">Select days</label>
@@ -256,6 +257,7 @@
               <input id="wizDeadlineDate" class="small-input" type="date" />
               <p class="small muted">Missing this date costs a life, same as any other missed commitment.</p>
             </div>
+            <p id="wizTrackerHint" class="small muted full-width hidden">No schedule, no lives at stake -- just an honest running clock since you last logged it. Good for things you're trying to cut down on, like "Eating meat" or "Drinking milk".</p>
           </div>
 
           <div class="wizard-step hidden" id="wizStep4">
@@ -295,6 +297,7 @@
               <option value="four">Four times a week</option>
               <option value="custom">Custom</option>
               <option value="deadline">One-off, due by a date</option>
+              <option value="tracker">Track time since last done</option>
             </select>
             <div id="customDays" style="display:none;" class="custom-days full-width">
               <label class="small muted">Select days</label>

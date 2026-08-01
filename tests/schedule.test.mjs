@@ -6,6 +6,7 @@ import {
   isScheduledDay,
   isWeeklyTargetSchedule,
   isDeadlineSchedule,
+  isTrackerSchedule,
   getScheduleDescription,
   countCompletionsThisWeek,
   computeStreak,
@@ -126,6 +127,36 @@ test('isDeadlineSchedule identifies deadline but not other schedule types', () =
 test('getScheduleDescription: describes a deadline commitment by its due date', () => {
   assertEqual(getScheduleDescription({ schedule: 'deadline', deadlineDate: '2026-08-05' }), 'One-off — due 2026-08-05');
   assertEqual(getScheduleDescription({ schedule: 'deadline' }), 'One-off with a deadline');
+});
+
+test('isScheduledDay: a tracker (running clock) is never a scheduled day', () => {
+  // Regression guard against isScheduledDay's generic fallback (which
+  // defaults to true for any unrecognized schedule) silently treating a
+  // tracker as a daily habit -- it must never be "due", or it would start
+  // costing lives for something that's explicitly not about compliance.
+  const c = { schedule: 'tracker' };
+  for (const day of ['2026-07-27', '2026-07-28', '2026-07-29', '2026-07-30', '2026-07-31', '2026-08-01', '2026-08-02']) {
+    assertEqual(isScheduledDay(c, day), false, `tracker on ${day}`);
+  }
+});
+
+test('isTrackerSchedule identifies tracker but not other schedule types', () => {
+  assertEqual(isTrackerSchedule({ schedule: 'tracker' }), true);
+  assertEqual(isTrackerSchedule({ schedule: 'daily' }), false);
+  assertEqual(isTrackerSchedule(null), false);
+});
+
+test('getScheduleDescription: describes a tracker as a running clock, not a schedule', () => {
+  assertEqual(getScheduleDescription({ schedule: 'tracker' }), 'Running clock — no fixed schedule');
+});
+
+test('computeStreak: a tracker always reads 0 and never loops looking for a scheduled day', () => {
+  // Same infinite-loop risk as the deadline schedule -- isScheduledDay()
+  // never returns true for 'tracker', so without this short-circuit,
+  // computeStreak() would walk backward from asOfIso forever.
+  const c = { schedule: 'tracker' };
+  assertEqual(computeStreak(c, ['2026-07-31'], '2026-07-31'), 0);
+  assertEqual(computeStreak(c, [], '2026-07-31'), 0);
 });
 
 test('isWeeklyTargetSchedule identifies twice/three/four but not daily/weekdays/custom', () => {

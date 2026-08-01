@@ -21,10 +21,23 @@ export function isDeadlineSchedule(commit){
   return !!commit && commit.schedule === 'deadline';
 }
 
+// A running clock since it was last logged (e.g. "3 days, 10 hours since
+// eating meat") -- there's no schedule to comply with and nothing is ever
+// "due", so it must never fall into isScheduledDay()'s generic fallback
+// (which defaults to true for any unrecognized schedule string) or it would
+// silently start costing lives for a habit that's explicitly not about
+// daily compliance. See computeStreak()'s early return for the same reason
+// deadline commitments short-circuit -- a schedule that's never "due" would
+// have computeStreak() walk backward forever looking for one.
+export function isTrackerSchedule(commit){
+  return !!commit && commit.schedule === 'tracker';
+}
+
 export function isScheduledDay(commit, isoDate){
   if(!commit || !isoDate) return false;
   if(isWeeklyTargetSchedule(commit)) return true;
   if(isDeadlineSchedule(commit)) return !!commit.deadlineDate && commit.deadlineDate === isoDate;
+  if(isTrackerSchedule(commit)) return false;
   const day = getDayKey(isoDate);
   if(commit.schedule === 'daily') return true;
   if(commit.schedule === 'weekdays') return ['mon','tue','wed','thu','fri'].includes(day);
@@ -41,6 +54,7 @@ export function getScheduleDescription(commit){
   if(commit.schedule === 'four') return 'Four times a week (any 4 days)';
   if(commit.schedule === 'custom' && Array.isArray(commit.scheduleDays)) return `Custom: ${commit.scheduleDays.join(', ')}`;
   if(commit.schedule === 'deadline') return commit.deadlineDate ? `One-off — due ${commit.deadlineDate}` : 'One-off with a deadline';
+  if(commit.schedule === 'tracker') return 'Running clock — no fixed schedule';
   return 'Daily';
 }
 
@@ -61,7 +75,7 @@ export function computeStreak(commit, historyDates, asOfIso){
   // in the future -- walking backward from asOfIso looking for a scheduled
   // day would never find one and loop forever. Streaks don't apply to a
   // single event anyway, so short-circuit to 0.
-  if(isDeadlineSchedule(commit)) return 0;
+  if(isDeadlineSchedule(commit) || isTrackerSchedule(commit)) return 0;
   const history = new Set(historyDates || []);
   const cursor = parseLocalDate(asOfIso);
   if(!cursor) return 0;

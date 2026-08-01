@@ -1389,6 +1389,25 @@ footer {
   display: none;
 }
 
+#wizTrackerHint.hidden {
+  display: none;
+}
+
+/* Running clock (tracker) status -- a compact variant sits inside the
+   headline row's body alongside the name/badges (same fix as the deadline
+   status widget: a fixed-width sibling next to the chevron crushes long
+   titles into an unreadable wrap), a larger variant in detail view. */
+.tracker-status {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--accent-dark);
+}
+
+.tracker-status.tracker-status-detail {
+  font-size: 1rem;
+  margin: 4px 0 10px;
+}
+
 .todo-add-row input {
   flex: 1 1 auto;
   padding: 10px 12px;

@@ -1,5 +1,5 @@
 import { localDateKey, parseLocalDate, nextLocalDate, prevLocalDate, getDayKey, weekStartDate } from './date-utils.js';
-import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, getScheduleDescription, countCompletionsThisWeek, computeStreak, computeWeeklyStreak, LABEL_CATEGORIES } from './schedule-utils.js';
+import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSchedule, getScheduleDescription, countCompletionsThisWeek, computeStreak, computeWeeklyStreak, LABEL_CATEGORIES } from './schedule-utils.js';
 
 // Simple Accountability App (localStorage-backed)
 (function(){
@@ -111,6 +111,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, getSchedule
   const wizCustomDays = document.getElementById('wizCustomDays');
   const wizDeadlineRow = document.getElementById('wizDeadlineRow');
   const wizDeadlineDate = document.getElementById('wizDeadlineDate');
+  const wizTrackerHint = document.getElementById('wizTrackerHint');
   const wizJoint = document.getElementById('wizJoint');
   const wizStartDate = document.getElementById('wizStartDate');
   const wizSummary = document.getElementById('wizSummary');
@@ -440,7 +441,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, getSchedule
 
   function rebuildStreak(commit){
     if(!commit || !commit.history) return 0;
-    if(isDeadlineSchedule(commit)) return 0;
+    if(isDeadlineSchedule(commit) || isTrackerSchedule(commit)) return 0;
     if(isWeeklyTargetSchedule(commit)) return computeWeeklyStreak(commit, commit.history, appToday());
     return computeStreak(commit, commit.history, appToday());
   }
@@ -755,13 +756,20 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, getSchedule
   async function pushCommitmentToServer(c){
     if(!authToken) return;
     const payload = {
-      text: c.text, enabled: c.enabled, doneToday: c.doneToday, schedule: c.schedule,
+      text: c.text, enabled: c.enabled, schedule: c.schedule,
       scheduleDays: c.scheduleDays || null, reminderEnabled: c.reminderEnabled || false,
       reminderTime: c.reminderTime || null, weeklyTarget: c.weeklyTarget || null,
       label: c.label || null, target: c.target || null, achieved: c.achieved || false,
       achievedAt: c.achievedAt || null, createdAt: c.createdAt || null,
-      scope: c.for === 'both' ? 'joint' : 'personal', deadlineDate: c.deadlineDate || null
+      scope: c.for === 'both' ? 'joint' : 'personal', deadlineDate: c.deadlineDate || null,
+      lastLoggedAt: c.lastLoggedAt || null
     };
+    // A tracker's "doneToday" is never a real toggle -- it's only ever
+    // changed via the dedicated /log endpoint (logTracker()). Sending it
+    // here would route an ordinary edit (pause, rename, etc.) through the
+    // server's doneToday branch, which increments today's completion_log
+    // count on every single push, not just an actual log event.
+    if(!isTrackerSchedule(c)) payload.doneToday = c.doneToday;
     try{
       let res;
       if(c.remoteId){
@@ -842,6 +850,38 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, getSchedule
       celebrateCompletion(c);
       maybeTriggerRareEvent(c.for);
     }
+  }
+
+  // Resets a tracker's running clock. Unlike toggleCommitDone, this isn't a
+  // toggle -- there's no "undone" state to switch back to, since the whole
+  // point is an honest log of when it last happened. Still records today in
+  // history (for the existing History heatmap) and pushes to the server via
+  // the dedicated /log endpoint rather than the doneToday PUT semantics.
+  async function logTracker(c){
+    if(!canEditCommit(c)){
+      showToast('Not yours to log', `Only ${userName(c.for)} can log "${c.text}".`);
+      return;
+    }
+    const nowIso = new Date().toISOString();
+    const today = appToday();
+    if(isRemoteMode() && c.remoteId){
+      try{
+        const res = await fetch(apiBase() + '/api/commitments/' + c.remoteId + '/log', { method: 'POST', headers: { authorization: 'Bearer '+authToken } });
+        if(res.ok){
+          const j = await res.json();
+          c.lastLoggedAt = j.lastLoggedAt || nowIso;
+        } else {
+          c.lastLoggedAt = nowIso;
+        }
+      }catch(e){ console.error('tracker log push failed', e); c.lastLoggedAt = nowIso; }
+    } else {
+      c.lastLoggedAt = nowIso;
+    }
+    c.history = c.history || [];
+    if(!c.history.includes(today)) c.history.push(today);
+    save(state);
+    renderList();
+    showToast('Logged', `Reset the clock for "${c.text}".`);
   }
 
   // Once a commitment is synced, the server is the source of truth for paw
@@ -975,6 +1015,49 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, getSchedule
     return el;
   }
 
+  // A tracker has no schedule and no lives at stake -- just a plain-English
+  // running clock since it was last logged, for things like "Eating meat"
+  // where the goal is to see how long you've gone, not to comply with a
+  // schedule.
+  function formatElapsed(ms){
+    const totalMinutes = Math.floor(Math.max(0, ms) / 60000);
+    const days = Math.floor(totalMinutes / 1440);
+    const hours = Math.floor((totalMinutes % 1440) / 60);
+    const minutes = totalMinutes % 60;
+    if(days > 0) return `${days} day${days === 1 ? '' : 's'}, ${hours} hour${hours === 1 ? '' : 's'}`;
+    if(hours > 0) return `${hours} hour${hours === 1 ? '' : 's'}, ${minutes} minute${minutes === 1 ? '' : 's'}`;
+    return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+  }
+
+  function trackerStatusText(lastLoggedAtIso, full){
+    if(!lastLoggedAtIso) return full ? "Not logged yet" : '⏱️ Not logged yet';
+    const elapsed = formatElapsed(Date.now() - new Date(lastLoggedAtIso).getTime());
+    return full ? `It's been ${elapsed} since last logged` : `⏱️ ${elapsed}`;
+  }
+
+  // Compact (headline) or full (detail) variant, both driven off the same
+  // data-lastLoggedAt attribute so the ticking updater below can refresh
+  // either one without needing to know which commitment it belongs to.
+  function buildTrackerStatus(c, { full = false } = {}){
+    const el = document.createElement('div');
+    el.className = 'tracker-status' + (full ? ' tracker-status-detail' : '');
+    el.dataset.lastLoggedAt = c.lastLoggedAt || '';
+    el.dataset.full = full ? '1' : '';
+    el.textContent = trackerStatusText(c.lastLoggedAt, full);
+    return el;
+  }
+
+  // Refreshes every visible tracker clock in place -- re-queries the DOM
+  // each tick rather than holding element references, so it stays correct
+  // across renderList() rebuilding the list and detail view being
+  // opened/closed freely.
+  function tickTrackerClocks(){
+    document.querySelectorAll('.tracker-status').forEach(el => {
+      el.textContent = trackerStatusText(el.dataset.lastLoggedAt || null, el.dataset.full === '1');
+    });
+  }
+  setInterval(tickTrackerClocks, 30000);
+
   function renderCommitmentsForUser(userId, targetList){
     targetList.innerHTML = '';
     const visible = state.commitments.filter(c => c.for === userId);
@@ -1015,15 +1098,19 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, getSchedule
     updateCommitStatusFromHistory(c);
     const li = document.createElement('li');
     li.className = 'commit-headline';
-    li.classList.toggle('is-done', !!c.doneToday);
+    // A tracker being "done today" means the avoided thing just happened --
+    // the green success tint would send exactly the wrong signal there, so
+    // it's excluded regardless of c.doneToday.
+    li.classList.toggle('is-done', !!c.doneToday && !isTrackerSchedule(c));
     li.classList.toggle('is-paused', !c.enabled);
 
     const isDeadline = isDeadlineSchedule(c);
+    const isTracker = isTrackerSchedule(c);
     const overdue = isDeadline && !c.doneToday && c.deadlineDate && c.deadlineDate < appToday();
 
     const icon = document.createElement('div');
     icon.className = 'card-status-icon';
-    icon.textContent = c.achieved ? '🏆' : c.doneToday ? '✅' : overdue ? '⏰' : (LABEL_ICONS[c.label] || '📌');
+    icon.textContent = c.achieved ? '🏆' : isTracker ? (LABEL_ICONS[c.label] || '⏱️') : c.doneToday ? '✅' : overdue ? '⏰' : (LABEL_ICONS[c.label] || '📌');
     icon.setAttribute('aria-hidden', 'true');
 
     const body = document.createElement('div'); body.className = 'headline-body';
@@ -1034,12 +1121,14 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, getSchedule
     `;
 
     // Unlike the compact week-strip (a fixed-width row of dots), the
-    // deadline status is a variable-length sentence -- it belongs stacked
-    // inside the body with the name and badges, not squeezed in as a
-    // fixed-width sibling next to the chevron, or long titles get crushed
+    // deadline/tracker status is a variable-length sentence -- it belongs
+    // stacked inside the body with the name and badges, not squeezed in as
+    // a fixed-width sibling next to the chevron, or long titles get crushed
     // into an unreadable mid-word wrap.
     if(isDeadline){
       body.appendChild(buildDeadlineStatus(c));
+    } else if(isTracker){
+      body.appendChild(buildTrackerStatus(c));
     }
 
     const chevron = document.createElement('div');
@@ -1049,7 +1138,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, getSchedule
 
     li.appendChild(icon);
     li.appendChild(body);
-    if(!isDeadline){
+    if(!isDeadline && !isTracker){
       const miniStrip = buildWeekStrip(c);
       miniStrip.classList.add('mini');
       li.appendChild(miniStrip);
@@ -1077,11 +1166,12 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, getSchedule
     const canPaw = c.for !== currentUser && c.for !== 'both';
     const badgesHtml = commitBadgesHtml(c);
     const isDeadline = isDeadlineSchedule(c);
+    const isTracker = isTrackerSchedule(c);
     const overdue = isDeadline && !c.doneToday && c.deadlineDate && c.deadlineDate < appToday();
 
     detailBody.innerHTML = `
       <div class="detail-header">
-        <div class="detail-icon">${c.achieved ? '🏆' : c.doneToday ? '✅' : overdue ? '⏰' : (LABEL_ICONS[c.label] || '📌')}</div>
+        <div class="detail-icon">${c.achieved ? '🏆' : isTracker ? (LABEL_ICONS[c.label] || '⏱️') : c.doneToday ? '✅' : overdue ? '⏰' : (LABEL_ICONS[c.label] || '📌')}</div>
         <div>
           <h2 class="detail-name">${escapeHtml(c.text)}</h2>
           ${badgesHtml ? `<div class="card-badges">${badgesHtml}</div>` : ''}
@@ -1090,7 +1180,17 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, getSchedule
       </div>
     `;
 
-    if(owned){
+    if(owned && isTracker){
+      const logBtn = document.createElement('button');
+      logBtn.type = 'button';
+      logBtn.className = 'detail-mark-btn';
+      logBtn.textContent = '🔁 Log now (resets the clock)';
+      logBtn.addEventListener('click', async ()=>{
+        await logTracker(c);
+        openCommitDetail(c);
+      });
+      detailBody.appendChild(logBtn);
+    } else if(owned){
       const markBtn = document.createElement('button');
       markBtn.type = 'button';
       markBtn.className = 'detail-mark-btn' + (c.doneToday ? ' is-done' : '');
@@ -1104,7 +1204,9 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, getSchedule
       detailBody.appendChild(markBtn);
     }
 
-    detailBody.appendChild(isDeadline ? buildDeadlineStatus(c) : buildWeekStrip(c));
+    if(isDeadline) detailBody.appendChild(buildDeadlineStatus(c));
+    else if(isTracker) detailBody.appendChild(buildTrackerStatus(c, { full: true }));
+    else detailBody.appendChild(buildWeekStrip(c));
 
     if(c.target){
       const progress = document.createElement('div'); progress.className = 'card-progress';
@@ -1120,7 +1222,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, getSchedule
       detailBody.appendChild(wp);
     }
 
-    if(owned){
+    if(owned && !isTracker){
       const reminderRow = document.createElement('div'); reminderRow.className = 'menu-item menu-reminder detail-reminder-row';
       const reminderToggle = document.createElement('label'); reminderToggle.className = 'toggle-switch small';
       reminderToggle.innerHTML = `<input type="checkbox" ${c.reminderEnabled ? 'checked':''}/><span class="toggle-slider"></span><span class="toggle-label">Reminder</span>`;
@@ -1464,6 +1566,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, getSchedule
     local.label = r.label;
     local.target = r.target;
     local.deadlineDate = r.deadlineDate || null;
+    local.lastLoggedAt = r.lastLoggedAt || null;
     local.history = history;
     local.createdAt = r.createdAt || local.createdAt || appToday();
     local.pawCount = r.pawCount;
@@ -1829,6 +1932,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, getSchedule
     wizCustomDays.querySelectorAll('input[name="wizDay"]').forEach(i => i.checked = false);
     if(wizDeadlineRow) wizDeadlineRow.style.display = 'none';
     if(wizDeadlineDate){ wizDeadlineDate.value = ''; wizDeadlineDate.min = appToday(); }
+    if(wizTrackerHint) wizTrackerHint.classList.add('hidden');
     wizLabelGrid.querySelectorAll('.label-tile').forEach(t => t.classList.remove('selected'));
     wizJoint.checked = false;
     wizStartDate.value = '';
@@ -1847,6 +1951,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, getSchedule
   wizSchedule.addEventListener('change', ()=>{
     wizCustomDays.style.display = wizSchedule.value === 'custom' ? 'block' : 'none';
     if(wizDeadlineRow) wizDeadlineRow.style.display = wizSchedule.value === 'deadline' ? 'block' : 'none';
+    if(wizTrackerHint) wizTrackerHint.classList.toggle('hidden', wizSchedule.value !== 'tracker');
   });
 
   wizBack.addEventListener('click', ()=>{
@@ -1872,10 +1977,11 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, getSchedule
     }
     const startDate = wizStartDate.value || null;
     const weeklyTarget = schedule === 'twice' ? 2 : (schedule === 'three' ? 3 : (schedule === 'four' ? 4 : null));
+    const lastLoggedAt = schedule === 'tracker' ? new Date().toISOString() : null;
 
     const commitItem = {
       id: uid(), text, for: forUser, enabled: true, doneToday: false, schedule, scheduleDays,
-      deadlineDate, streak: 0, lastDone: null, remoteId: null, history: [], label, target: null,
+      deadlineDate, lastLoggedAt, streak: 0, lastDone: null, remoteId: null, history: [], label, target: null,
       reminderEnabled: false, reminderTime: null, paws: 0, comments: [], weeklyTarget,
       createdAt: startDate || appToday()
     };
@@ -2261,6 +2367,10 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, getSchedule
         commitItem.schedule = schedule;
         commitItem.scheduleDays = scheduleDays;
         commitItem.deadlineDate = deadlineDate;
+        // Only stamp a starting point the first time a commitment becomes a
+        // tracker -- editing its text/label afterward shouldn't reset the
+        // clock it's already been running.
+        if(schedule === 'tracker' && !commitItem.lastLoggedAt) commitItem.lastLoggedAt = new Date().toISOString();
         commitItem.label = label;
         commitItem.target = target;
         commitItem.createdAt = startDate || commitItem.createdAt;
@@ -2271,7 +2381,8 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, getSchedule
         scheduleReminderFor(commitItem);
       }
     } else {
-      commitItem = { id: uid(), text, for: forUser, enabled, doneToday:false, schedule, scheduleDays, deadlineDate, streak:0, lastDone:null, remoteId:null, history: [], label, target, reminderEnabled, reminderTime, paws:0, comments: [], weeklyTarget, createdAt: startDate || appToday() };
+      const lastLoggedAt = schedule === 'tracker' ? new Date().toISOString() : null;
+      commitItem = { id: uid(), text, for: forUser, enabled, doneToday:false, schedule, scheduleDays, deadlineDate, lastLoggedAt, streak:0, lastDone:null, remoteId:null, history: [], label, target, reminderEnabled, reminderTime, paws:0, comments: [], weeklyTarget, createdAt: startDate || appToday() };
       state.commitments.push(commitItem);
       scheduleReminderFor(commitItem);
     }
