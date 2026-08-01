@@ -496,32 +496,6 @@ app.post('/api/suggestions/:id/reject', authMiddleware, async (req,res)=>{
 // and resets XP to 0. Leaves the commitments themselves (so nothing has to
 // be re-created), and leaves paws/comments (those are the other person's
 // messages, not "progress").
-// TEMPORARY -- one-time full data wipe requested 2026-08-01 (Anna & Jordan
-// were just testing/playing with the app and want a clean slate before the
-// next release). Not gated behind authMiddleware since neither of them can
-// hand me a password -- gated behind a one-off secret instead. Remove this
-// entire route once it's been run.
-app.post('/api/admin/wipe-all', async (req,res)=>{
-  if(req.query.secret !== 'Go2CnqbRmBEzH2A0etsFOYphTfNCK_6B') return res.status(404).end();
-  try{
-    const counts = {
-      commitments: (await dbAll('SELECT COUNT(*) as n FROM commitments'))[0].n,
-      completion_log: (await dbAll('SELECT COUNT(*) as n FROM completion_log'))[0].n,
-      suggestions: (await dbAll('SELECT COUNT(*) as n FROM commitment_suggestions'))[0].n,
-    };
-    await dbRun('DELETE FROM completion_log');
-    await dbRun('DELETE FROM paw_log');
-    await dbRun('DELETE FROM comments');
-    await dbRun('DELETE FROM commitment_suggestions');
-    await dbRun('DELETE FROM commitments');
-    await dbRun("UPDATE users SET xp = 0, lastProgressReset = NULL, lastEndOfDaySent = NULL, lastWeeklyCategoryCheck = NULL WHERE LOWER(name) IN ('anna','jordan')");
-    res.json({ success: true, deleted: counts });
-  }catch(e){
-    console.error('wipe-all error', e);
-    res.status(500).json({ error: 'db' });
-  }
-});
-
 const RESET_COOLDOWN_DAYS = 30;
 app.post('/api/me/reset', authMiddleware, async (req,res)=>{
   try{
