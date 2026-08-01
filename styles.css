@@ -114,6 +114,24 @@ main.user-columns {
   padding: 22px;
 }
 
+.joint-panel {
+  margin-top: 20px;
+  border-color: var(--secondary);
+}
+
+.joint-panel.hidden {
+  display: none;
+}
+
+.joint-badge {
+  background: var(--secondary-soft);
+  color: var(--secondary-dark);
+  padding: 4px 10px;
+  border-radius: var(--radius-chip);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
 .panel-header {
   display: flex;
   align-items: center;

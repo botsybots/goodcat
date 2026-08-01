@@ -50,8 +50,11 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   const commitSchedule = document.getElementById('commitSchedule');
   const commitListAnna = document.getElementById('commitList-anna');
   const commitListJordan = document.getElementById('commitList-jordan');
+  const jointSection = document.getElementById('jointSection');
+  const commitListJoint = document.getElementById('commitList-joint');
   const commitLabel = document.getElementById('commitLabel');
   const commitTarget = document.getElementById('commitTarget');
+  const commitJoint = document.getElementById('commitJoint');
   const commitStartDate = document.getElementById('commitStartDate');
   const commitReminderEnabled = document.getElementById('commitReminderEnabled');
   const commitReminderTime = document.getElementById('commitReminderTime');
@@ -168,15 +171,30 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     if(authGate) authGate.classList.remove('hidden');
   }
 
-  // Notification controls
+  // Notification controls. The button itself used to never change
+  // appearance and its status text only ever refreshed once, at page load
+  // -- so re-opening Settings later always showed the original "Enable
+  // Notifications" label even once permission had actually been granted,
+  // looking exactly like it hadn't stuck. It also silently swallowed any
+  // failure in the push-subscribe step, so a real failure there (e.g. the
+  // server's push keys having changed) looked identical to success.
   let notifyTimers = new Map();
-  function updateNotifyStatus(){ notifyStatus.textContent = 'Permission: ' + (typeof Notification !== 'undefined' ? Notification.permission : 'unsupported'); }
+  function updateNotifyStatus(){
+    const supported = typeof Notification !== 'undefined';
+    const permission = supported ? Notification.permission : 'unsupported';
+    notifyStatus.textContent = supported ? 'Permission: ' + permission : 'Not supported in this browser';
+    if(!supported) return;
+    btnEnableNotify.textContent = permission === 'granted' ? '🔔 Notifications On' : 'Enable Notifications';
+  }
   updateNotifyStatus();
+  settingsBtn.addEventListener('click', updateNotifyStatus);
   btnEnableNotify.addEventListener('click', async ()=>{
     if(typeof Notification === 'undefined') return alert('Notifications not supported in this browser.');
     const p = await Notification.requestPermission(); updateNotifyStatus();
     if(p==='granted'){
-      // register service worker and subscribe for push
+      // register service worker and subscribe for push. Also re-run when
+      // already granted -- clicking again re-subscribes, which is the way
+      // to recover if the subscription itself ever goes stale/fails.
       try{
         const reg = await navigator.serviceWorker.register('service-worker.js');
         const vap = await fetch(apiBase() + '/api/vapidPublicKey');
@@ -184,10 +202,16 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
         const key = j.publicKey;
         const applicationServerKey = urlBase64ToUint8Array(key);
         const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey });
-        // send to server
-        await fetch(apiBase() + '/api/subscribe', { method: 'POST', headers: { 'content-type':'application/json', 'authorization':'Bearer '+authToken }, body: JSON.stringify(sub) });
-      }catch(e){ console.error('push subscribe failed', e); }
+        const subRes = await fetch(apiBase() + '/api/subscribe', { method: 'POST', headers: { 'content-type':'application/json', 'authorization':'Bearer '+authToken }, body: JSON.stringify(sub) });
+        if(!subRes.ok) throw new Error('subscribe request failed');
+        showToast('Notifications on', "You'll get reminders and updates from Good Cat.");
+      }catch(e){
+        console.error('push subscribe failed', e);
+        showToast('Almost there', 'Permission was granted, but saving the subscription failed. Try again in a bit.');
+      }
       scheduleAllReminders();
+    } else if(p === 'denied'){
+      showToast('Blocked', "Notifications are blocked for this app in your phone/browser settings -- you'll need to allow them there.");
     }
   });
 
@@ -303,13 +327,23 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   function maybeTriggerRareEvent(userId){
     if(Math.random() >= RARE_EVENT_CHANCE) return;
     ensureLifeState();
-    if(state.lives[userId] >= MAX_LIVES) return;
-    state.lives[userId] = Math.min(MAX_LIVES, state.lives[userId] + 1);
+    // A joint commitment rolls once, not once per person -- if it hits,
+    // it's a bonus life for both of you, not a second independent chance.
+    const targets = userId === 'both' ? ['anna','jordan'] : [userId];
+    let grantedAny = false;
+    targets.forEach(t=>{
+      if(state.lives[t] < MAX_LIVES){
+        state.lives[t] = Math.min(MAX_LIVES, state.lives[t] + 1);
+        grantedAny = true;
+      }
+    });
+    if(!grantedAny) return;
     save(state);
     setTimeout(()=> showCelebration(pick(RARE_EVENT_MESSAGES)), 2800);
   }
 
   function userName(id){
+    if(id === 'both') return 'Both of you';
     const user = state.users.find(u => u.id === id);
     return user ? user.name : id;
   }
@@ -323,7 +357,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   }
 
   function canEditCommit(c){
-    return !isRemoteMode() || c.for === currentUser;
+    return !isRemoteMode() || c.for === currentUser || c.for === 'both';
   }
 
   function lockIdentityControls(locked){
@@ -387,7 +421,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   // commitments aren't due on any particular calendar day, so they're
   // evaluated separately, once per week, in getUserWeeklyComplianceForWeek().
   function getUserScheduledCountsForDate(userId, date){
-    const commits = state.commitments.filter(c => c.for === userId && c.enabled && !isWeeklyTargetSchedule(c));
+    const commits = state.commitments.filter(c => (c.for === userId || c.for === 'both') && c.enabled && !isWeeklyTargetSchedule(c));
     const isoDate = localDateKey(date);
     let scheduled = 0;
     let done = 0;
@@ -408,7 +442,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   // the other days of the week.
   function getUserWeeklyComplianceForWeek(userId, weekStartDateObj){
     const weekEndIso = localDateKey(new Date(weekStartDateObj.getTime() + 6 * 24 * 60 * 60 * 1000));
-    const commits = state.commitments.filter(c => c.for === userId && c.enabled && isWeeklyTargetSchedule(c));
+    const commits = state.commitments.filter(c => (c.for === userId || c.for === 'both') && c.enabled && isWeeklyTargetSchedule(c));
     let total = 0;
     let compliant = 0;
     for(const commit of commits){
@@ -438,8 +472,8 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     const yesterday = prevLocalDate(today);
     let startDate = state.lifeLastEvaluatedDate[userId] ? nextLocalDate(state.lifeLastEvaluatedDate[userId]) : null;
     if(!startDate){
-      const createdDates = state.commitments.filter(c=>c.for===userId).map(getCommitCreatedDate).filter(Boolean);
-      const historyDates = state.commitments.filter(c=>c.for===userId && Array.isArray(c.history)).flatMap(c=>c.history);
+      const createdDates = state.commitments.filter(c=>c.for===userId || c.for==='both').map(getCommitCreatedDate).filter(Boolean);
+      const historyDates = state.commitments.filter(c=>(c.for===userId || c.for==='both') && Array.isArray(c.history)).flatMap(c=>c.history);
       const allDates = [...createdDates, ...historyDates];
       startDate = allDates.length ? allDates.reduce((a,b)=> a < b ? a : b) : today;
     }
@@ -631,7 +665,8 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
       scheduleDays: c.scheduleDays || null, reminderEnabled: c.reminderEnabled || false,
       reminderTime: c.reminderTime || null, weeklyTarget: c.weeklyTarget || null,
       label: c.label || null, target: c.target || null, achieved: c.achieved || false,
-      achievedAt: c.achievedAt || null, createdAt: c.createdAt || null
+      achievedAt: c.achievedAt || null, createdAt: c.createdAt || null,
+      scope: c.for === 'both' ? 'joint' : 'personal'
     };
     try{
       let res;
@@ -648,13 +683,17 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
         if(j.achieved !== undefined) c.achieved = j.achieved || c.achieved;
         if(j.achievedAt !== undefined) c.achievedAt = j.achievedAt || c.achievedAt;
         if(j.xp !== undefined && j.xp !== null){
+          // The server reports the requester's own new XP total -- for a
+          // joint commitment the other person's XP also changed, but their
+          // client picks that up on its own next sync, same as everything
+          // else that isn't tied to whoever made this particular request.
           state.usersXp = state.usersXp || {};
-          const prevXp = state.usersXp[c.for] || 0;
+          const prevXp = state.usersXp[currentUser] || 0;
           const prevLevel = levelForXp(prevXp);
-          state.usersXp[c.for] = j.xp;
+          state.usersXp[currentUser] = j.xp;
           const newLevel = levelForXp(j.xp);
           if(j.xp > prevXp && newLevel.name !== prevLevel.name){
-            setTimeout(()=> showCelebration(`🎉 ${userName(c.for)} leveled up to ${newLevel.name}!`), 2800);
+            setTimeout(()=> showCelebration(`🎉 ${userName(currentUser)} leveled up to ${newLevel.name}!`), 2800);
           }
         }
         save(state);
@@ -813,7 +852,19 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
       targetList.innerHTML = '<li class="empty-state small muted">Nothing here yet. Tap + and give the Good Cat something to keep an eye on.</li>';
       return;
     }
-    visible.forEach(c => {
+    visible.forEach(c => targetList.appendChild(buildCommitCard(c)));
+  }
+
+  function renderJointCommitments(){
+    if(!jointSection || !commitListJoint) return;
+    commitListJoint.innerHTML = '';
+    const visible = state.commitments.filter(c => c.for === 'both');
+    jointSection.classList.toggle('hidden', visible.length === 0);
+    if(visible.length === 0) return;
+    visible.forEach(c => commitListJoint.appendChild(buildCommitCard(c)));
+  }
+
+  function buildCommitCard(c){
       c.history = c.history || [];
       updateCommitStatusFromHistory(c);
       const li = document.createElement('li');
@@ -845,6 +896,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
       const body = document.createElement('div'); body.className='card-body';
       const notStartedYet = c.createdAt && c.createdAt > appToday();
       const badgesHtml = [
+        c.for === 'both' ? '<span class="joint-badge">🤝 Together</span>' : '',
         !c.enabled ? '<span class="paused-badge">Paused</span>' : '',
         notStartedYet ? `<span class="paused-badge">Starts ${escapeHtml(c.createdAt)}</span>` : '',
         c.label ? `<span class="label-badge">${LABEL_ICONS[c.label] || ''} ${escapeHtml(c.label)}</span>` : '',
@@ -857,7 +909,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
       `;
 
       const sideActions = document.createElement('div'); sideActions.className = 'card-side-actions';
-      const canPaw = c.for !== currentUser;
+      const canPaw = c.for !== currentUser && c.for !== 'both';
       if(canPaw){
         const pawBtn = document.createElement('button');
         pawBtn.type = 'button';
@@ -998,13 +1050,13 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
         if(event.target.closest('.card-side-actions') || event.target.closest('.card-menu')) return;
         toggleCommitDone(c);
       });
-      targetList.appendChild(li);
-    });
+      return li;
   }
 
   function renderList(){
     updateLivesForUser('anna');
     updateLivesForUser('jordan');
+    renderJointCommitments();
     renderCommitmentsForUser('anna', commitListAnna);
     renderCommitmentsForUser('jordan', commitListJordan);
     renderLives();
@@ -1158,6 +1210,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     }
     commitLabel.value = commit.label || '';
     commitTarget.value = commit.target || '';
+    commitJoint.checked = commit.for === 'both';
     commitStartDate.value = commit.createdAt || '';
     commitReminderEnabled.checked = !!commit.reminderEnabled;
     commitReminderTime.value = commit.reminderTime || '';
@@ -1223,7 +1276,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   }
 
   async function pushUnsyncedLocalCommitments(){
-    const unsynced = state.commitments.filter(c => c.for === currentUser && !c.remoteId);
+    const unsynced = state.commitments.filter(c => (c.for === currentUser || c.for === 'both') && !c.remoteId);
     for(const c of unsynced) await pushCommitmentToServer(c);
   }
 
@@ -1368,6 +1421,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     document.querySelectorAll('#customDays input[name="commitDay"]').forEach(input=>input.checked=false);
     commitLabel.value = '';
     commitTarget.value = '';
+    commitJoint.checked = false;
     commitStartDate.value = '';
     commitStartDate.min = appToday();
     commitReminderEnabled.checked = false;
@@ -1697,7 +1751,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     e.preventDefault();
     const text = commitText.value.trim();
     if(!text) return;
-    const forUser = commitFor.value;
+    const forUser = commitJoint && commitJoint.checked ? 'both' : commitFor.value;
     const enabled = commitEnabled.checked;
     const schedule = (typeof commitSchedule !== 'undefined' && commitSchedule.value) ? commitSchedule.value : 'daily';
     let scheduleDays = null;
@@ -1744,10 +1798,11 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     if(commitStartDate) commitStartDate.value='';
     if(commitReminderEnabled) commitReminderEnabled.checked = false;
     if(commitReminderTime) commitReminderTime.value = '';
+    if(commitJoint) commitJoint.checked = false;
     document.querySelectorAll('#customDays input[name="commitDay"]').forEach(input=>input.checked=false);
     addModal.classList.add('hidden');
     renderList();
-    if(commitItem && commitItem.for === currentUser) pushCommitmentToServer(commitItem);
+    if(commitItem && (commitItem.for === currentUser || commitItem.for === 'both')) pushCommitmentToServer(commitItem);
   });
 
   // Initial render

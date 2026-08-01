@@ -43,6 +43,15 @@
         <div id="suggestionsList"></div>
       </section>
 
+      <section id="jointSection" class="user-panel joint-panel hidden">
+        <div class="panel-header">
+          <div>
+            <h2>🤝 Together</h2>
+          </div>
+        </div>
+        <ul id="commitList-joint"></ul>
+      </section>
+
       <main class="user-columns">
         <section class="user-panel">
           <div class="panel-header">
@@ -183,6 +192,7 @@
               <option value="Social">🎉 Social</option>
               <option value="Relationship">💞 Relationship</option>
             </select>
+            <label class="toggle-switch small full-width"><input type="checkbox" id="commitJoint" /><span class="toggle-slider"></span><span class="toggle-label">🤝 Joint commitment (shared by both of you)</span></label>
             <input id="commitTarget" class="small-input" placeholder="Target streak days" type="number" min="1" style="display:none" />
             <label class="full-width small muted" for="commitStartDate">Start on (optional — leave blank to start today)</label>
             <input id="commitStartDate" class="small-input" type="date" />
