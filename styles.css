@@ -51,11 +51,13 @@ body {
 }
 
 header {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 16px;
+  padding-right: 56px;
 }
 
 h1 {
@@ -144,6 +146,7 @@ main.user-columns {
 
 .icon-button,
 .fab,
+.inline-add-btn,
 .close-btn {
   border: 1px solid var(--border);
   background: var(--paper);
@@ -164,6 +167,62 @@ main.user-columns {
 .icon-button:hover,
 .close-btn:hover {
   background: var(--paper-dim);
+}
+
+/* Anchored to the header's own box (which has padding-right reserved for
+   it), not the flex row -- so it can never get pushed onto its own line
+   and end up on the wrong side when the title wraps to multiple lines. */
+#settingsBtn {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 1.25rem;
+  box-shadow: var(--shadow-lift);
+}
+
+#settingsBtn:hover {
+  transform: scale(1.05);
+}
+
+.panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.collapse-toggle {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 1rem;
+}
+
+.inline-add-btn {
+  position: static;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 1.4rem;
+  background: var(--accent);
+  border-color: var(--accent-dark);
+  color: #fff8ef;
+  box-shadow: none;
+}
+
+.inline-add-btn:hover {
+  background: var(--accent-dark);
+}
+
+.user-panel.is-collapsed ul,
+.user-panel.is-collapsed .council-banner {
+  display: none;
 }
 
 .fab {

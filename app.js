@@ -621,6 +621,53 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     // it's exactly the kind of "testing only" control that caused real
     // confusion when used without realizing what it actually does.
     if(btnShowState) btnShowState.style.display = currentUser === 'anna' ? '' : 'none';
+    applyLayoutForCurrentUser();
+  }
+
+  // Whoever's logged in sees their own commitments first, with the other
+  // person's section collapsible (Jordan asked to be able to minimize
+  // Anna's, and by the same logic Anna should be able to minimize his) --
+  // and "Add Commitment" lives in your own section header instead of a
+  // floating button disconnected from either list.
+  function applyLayoutForCurrentUser(){
+    const otherId = currentUser === 'anna' ? 'jordan' : 'anna';
+    const mineSection = document.getElementById('section-' + currentUser);
+    const otherSection = document.getElementById('section-' + otherId);
+    const columns = document.querySelector('main.user-columns');
+    if(!mineSection || !otherSection || !columns) return;
+    columns.appendChild(mineSection);
+    columns.appendChild(otherSection);
+    mineSection.classList.remove('is-collapsed');
+
+    const myActions = document.getElementById('panel-actions-' + currentUser);
+    if(myActions && addButton){
+      addButton.classList.remove('fab');
+      addButton.classList.add('inline-add-btn');
+      myActions.appendChild(addButton);
+    }
+    const staleToggle = myActions ? myActions.querySelector('.collapse-toggle') : null;
+    if(staleToggle) staleToggle.remove();
+
+    const otherActions = document.getElementById('panel-actions-' + otherId);
+    if(otherActions && !otherActions.querySelector('.collapse-toggle')){
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'collapse-toggle icon-button';
+      const setLabel = ()=>{
+        const collapsed = otherSection.classList.contains('is-collapsed');
+        btn.textContent = collapsed ? '▸' : '▾';
+        btn.setAttribute('aria-label', (collapsed ? 'Show ' : 'Minimize ') + userName(otherId) + "'s commitments");
+      };
+      otherSection.classList.toggle('is-collapsed', !!state.collapsedOther);
+      setLabel();
+      btn.addEventListener('click', ()=>{
+        otherSection.classList.toggle('is-collapsed');
+        state.collapsedOther = otherSection.classList.contains('is-collapsed');
+        save(state);
+        setLabel();
+      });
+      otherActions.appendChild(btn);
+    }
   }
 
   // Overflow ("...") menus: only one open at a time, closed by clicking
