@@ -617,6 +617,10 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     if(!state.users.find(u => u.id === currentUser)) currentUser = state.users[0]?.id || 'anna';
     commitFor.value = currentUser;
     if(userSwitch) userSwitch.textContent = userName(currentUser);
+    // Debug Tools stays Anna-only -- Jordan doesn't need it day to day, and
+    // it's exactly the kind of "testing only" control that caused real
+    // confusion when used without realizing what it actually does.
+    if(btnShowState) btnShowState.style.display = currentUser === 'anna' ? '' : 'none';
   }
 
   // Overflow ("...") menus: only one open at a time, closed by clicking
