@@ -5,6 +5,8 @@
 import {
   isScheduledDay,
   isWeeklyTargetSchedule,
+  isDeadlineSchedule,
+  getScheduleDescription,
   countCompletionsThisWeek,
   computeStreak,
   computeWeeklyStreak
@@ -104,6 +106,28 @@ test('isScheduledDay: "N times a week" schedules are due every day (not pinned t
   }
 });
 
+test('isScheduledDay: a one-off deadline commitment is due only on its exact deadline date', () => {
+  const c = { schedule: 'deadline', deadlineDate: '2026-08-05' };
+  assertEqual(isScheduledDay(c, '2026-08-04'), false);
+  assertEqual(isScheduledDay(c, '2026-08-05'), true);
+  assertEqual(isScheduledDay(c, '2026-08-06'), false);
+});
+
+test('isScheduledDay: a deadline commitment with no deadlineDate set is never due', () => {
+  assertEqual(isScheduledDay({ schedule: 'deadline' }, '2026-08-05'), false);
+});
+
+test('isDeadlineSchedule identifies deadline but not other schedule types', () => {
+  assertEqual(isDeadlineSchedule({ schedule: 'deadline' }), true);
+  assertEqual(isDeadlineSchedule({ schedule: 'daily' }), false);
+  assertEqual(isDeadlineSchedule(null), false);
+});
+
+test('getScheduleDescription: describes a deadline commitment by its due date', () => {
+  assertEqual(getScheduleDescription({ schedule: 'deadline', deadlineDate: '2026-08-05' }), 'One-off — due 2026-08-05');
+  assertEqual(getScheduleDescription({ schedule: 'deadline' }), 'One-off with a deadline');
+});
+
 test('isWeeklyTargetSchedule identifies twice/three/four but not daily/weekdays/custom', () => {
   assertEqual(isWeeklyTargetSchedule({ schedule: 'twice' }), true);
   assertEqual(isWeeklyTargetSchedule({ schedule: 'three' }), true);
@@ -150,6 +174,18 @@ test('computeStreak: today not yet done means the active streak reads 0', () => 
   const c = { schedule: 'daily' };
   const history = ['2026-07-29', '2026-07-30']; // yesterday done, today not
   assertEqual(computeStreak(c, history, '2026-07-31'), 0);
+});
+
+test('computeStreak: a deadline commitment always reads 0 and never loops looking for a scheduled day', () => {
+  // Regression guard: isScheduledDay() only ever returns true on the exact
+  // deadlineDate for a 'deadline' schedule, so if computeStreak() didn't
+  // short-circuit on this schedule type, walking backward from asOfIso
+  // looking for a scheduled day (with a future or nonexistent deadlineDate)
+  // would never find one and loop forever.
+  const c = { schedule: 'deadline', deadlineDate: '2026-12-31' };
+  assertEqual(computeStreak(c, ['2026-07-31'], '2026-07-31'), 0);
+  const cNoDeadline = { schedule: 'deadline' };
+  assertEqual(computeStreak(cNoDeadline, [], '2026-07-31'), 0);
 });
 
 // --- schedule-utils: computeWeeklyStreak ---

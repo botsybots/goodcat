@@ -1,5 +1,5 @@
 import { localDateKey, parseLocalDate, nextLocalDate, prevLocalDate, getDayKey, weekStartDate } from './date-utils.js';
-import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCompletionsThisWeek, computeStreak, computeWeeklyStreak, LABEL_CATEGORIES } from './schedule-utils.js';
+import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, getScheduleDescription, countCompletionsThisWeek, computeStreak, computeWeeklyStreak, LABEL_CATEGORIES } from './schedule-utils.js';
 
 // Simple Accountability App (localStorage-backed)
 (function(){
@@ -59,6 +59,8 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   const commitReminderEnabled = document.getElementById('commitReminderEnabled');
   const commitReminderTime = document.getElementById('commitReminderTime');
   const customDays = document.getElementById('customDays');
+  const commitDeadlineRow = document.getElementById('commitDeadlineRow');
+  const commitDeadlineDate = document.getElementById('commitDeadlineDate');
   const authName = document.getElementById('authName');
   const authPass = document.getElementById('authPass');
   const btnRegister = document.getElementById('btnRegister');
@@ -107,6 +109,8 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
   const wizText = document.getElementById('wizText');
   const wizSchedule = document.getElementById('wizSchedule');
   const wizCustomDays = document.getElementById('wizCustomDays');
+  const wizDeadlineRow = document.getElementById('wizDeadlineRow');
+  const wizDeadlineDate = document.getElementById('wizDeadlineDate');
   const wizJoint = document.getElementById('wizJoint');
   const wizStartDate = document.getElementById('wizStartDate');
   const wizSummary = document.getElementById('wizSummary');
@@ -234,9 +238,10 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     }
   });
 
-  // show/hide custom days when schedule selector changes
+  // show/hide custom days / deadline date when schedule selector changes
   commitSchedule.addEventListener('change', ()=>{
-    if(commitSchedule.value === 'custom') customDays.style.display = 'block'; else customDays.style.display = 'none';
+    customDays.style.display = commitSchedule.value === 'custom' ? 'block' : 'none';
+    if(commitDeadlineRow) commitDeadlineRow.style.display = commitSchedule.value === 'deadline' ? 'block' : 'none';
   });
 
   function urlBase64ToUint8Array(base64String) {
@@ -408,6 +413,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
 
   function rebuildStreak(commit){
     if(!commit || !commit.history) return 0;
+    if(isDeadlineSchedule(commit)) return 0;
     if(isWeeklyTargetSchedule(commit)) return computeWeeklyStreak(commit, commit.history, appToday());
     return computeStreak(commit, commit.history, appToday());
   }
@@ -416,7 +422,11 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     if(!commit) return;
     commit.history = commit.history || [];
     commit.streak = rebuildStreak(commit);
-    commit.doneToday = commit.history.includes(appToday());
+    // A one-off commitment is either completed or not -- there's no "today"
+    // to key off, since it may have been finished days before its deadline
+    // and should still read as done on every later render, not just the day
+    // it happened.
+    commit.doneToday = isDeadlineSchedule(commit) ? commit.history.length > 0 : commit.history.includes(appToday());
     if(commit.target && commit.streak >= commit.target){
       commit.achieved = true;
       commit.achievedAt = commit.achievedAt || appToday();
@@ -449,7 +459,13 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
       if(created > isoDate) continue;
       if(isScheduledDay(commit, isoDate)){
         scheduled += 1;
-        if(Array.isArray(commit.history) && commit.history.includes(isoDate)) done += 1;
+        // A one-off deadline commitment is only ever "due" on its single
+        // deadline date, but may have been completed on an earlier day --
+        // so "done" means completed at all, not completed on this exact date.
+        const isDone = isDeadlineSchedule(commit)
+          ? Array.isArray(commit.history) && commit.history.length > 0
+          : Array.isArray(commit.history) && commit.history.includes(isoDate);
+        if(isDone) done += 1;
       }
     }
     return { scheduled, done };
@@ -507,7 +523,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
         if(!state.lifeLosses[userId][dayKey]){
           state.lifeLosses[userId][dayKey] = true;
           state.lives[userId] = Math.max(0, state.lives[userId] - 1);
-          if(dayKey === yesterday || dayKey === today) showToast('Bots is judging you', `${userName(userId)} missed a scheduled habit.`);
+          if(dayKey === yesterday || dayKey === today) showToast('Bots is judging you', `${userName(userId)} missed a scheduled habit — lost 1 life.`);
         }
       }
       // "N times a week" habits are only judged once, at the end of their
@@ -521,7 +537,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
           if(compliance.total > 0 && compliance.compliant < compliance.total){
             state.weeklyLifeLosses[userId][weekStartIso] = true;
             state.lives[userId] = Math.max(0, state.lives[userId] - 1);
-            if(dayKey === yesterday || dayKey === today) showToast('Bots is judging you', `${userName(userId)} missed a weekly target.`);
+            if(dayKey === yesterday || dayKey === today) showToast('Bots is judging you', `${userName(userId)} missed a weekly target — lost 1 life.`);
           }
         }
       }
@@ -542,7 +558,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
             state.lifeGains[userId][dayKey] = gain;
             state.lives[userId] = Math.min(MAX_LIVES, state.lives[userId] + gain);
             if(dayKey === yesterday || dayKey === today){
-              showToast('Loki is pleased with ' + userName(userId), `Great job keeping up with scheduled habits.`);
+              showToast('Loki is pleased with ' + userName(userId), `Kept up with scheduled habits — gained ${gain} ${gain === 1 ? 'life' : 'lives'}!`);
             }
           }
         }
@@ -711,7 +727,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
       reminderTime: c.reminderTime || null, weeklyTarget: c.weeklyTarget || null,
       label: c.label || null, target: c.target || null, achieved: c.achieved || false,
       achievedAt: c.achievedAt || null, createdAt: c.createdAt || null,
-      scope: c.for === 'both' ? 'joint' : 'personal'
+      scope: c.for === 'both' ? 'joint' : 'personal', deadlineDate: c.deadlineDate || null
     };
     try{
       let res;
@@ -761,13 +777,20 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     const today = appToday();
     c.history = c.history || [];
     const justCompleted = !c.doneToday;
+    const isDeadline = isDeadlineSchedule(c);
     if(!c.doneToday){
-      if(!c.history.includes(today)) c.history.push(today);
+      // A one-off commitment only ever has one completion -- replace rather
+      // than push, so there's never more than the single record it needs.
+      if(isDeadline) c.history = [today];
+      else if(!c.history.includes(today)) c.history.push(today);
       c.doneToday = true;
     } else {
       c.doneToday = false;
-      const idx = c.history.indexOf(today);
-      if(idx >= 0) c.history.splice(idx, 1);
+      if(isDeadline) c.history = [];
+      else {
+        const idx = c.history.indexOf(today);
+        if(idx >= 0) c.history.splice(idx, 1);
+      }
     }
     updateCommitStatusFromHistory(c);
     if(c.target && c.streak >= c.target){
@@ -892,6 +915,33 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     return strip;
   }
 
+  // A one-off commitment doesn't have a "recent pattern" the way a recurring
+  // habit does -- a 7-day strip of empty boxes either side of its one due
+  // date would be more confusing than useful. Shows a countdown/overdue
+  // status instead, in both the compact headline row and the full detail view.
+  function deadlineStatusInfo(c){
+    const today = appToday();
+    const done = Array.isArray(c.history) && c.history.length > 0;
+    if(done){
+      const completedOn = c.history[0];
+      return { cls: 'is-complete', text: `✅ Completed${completedOn ? ' on ' + completedOn : ''}` };
+    }
+    const deadline = c.deadlineDate;
+    if(!deadline) return { cls: '', text: 'No deadline set' };
+    if(deadline < today) return { cls: 'is-overdue', text: `⏰ Overdue — was due ${deadline}` };
+    if(deadline === today) return { cls: 'is-due-today', text: '⏳ Due today' };
+    const days = Math.round((parseLocalDate(deadline) - parseLocalDate(today)) / (24*60*60*1000));
+    return { cls: 'is-upcoming', text: `📅 Due ${deadline} · ${days} day${days === 1 ? '' : 's'} left` };
+  }
+
+  function buildDeadlineStatus(c){
+    const info = deadlineStatusInfo(c);
+    const el = document.createElement('div');
+    el.className = 'deadline-status' + (info.cls ? ' ' + info.cls : '');
+    el.textContent = info.text;
+    return el;
+  }
+
   function renderCommitmentsForUser(userId, targetList){
     targetList.innerHTML = '';
     const visible = state.commitments.filter(c => c.for === userId);
@@ -935,9 +985,12 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     li.classList.toggle('is-done', !!c.doneToday);
     li.classList.toggle('is-paused', !c.enabled);
 
+    const isDeadline = isDeadlineSchedule(c);
+    const overdue = isDeadline && !c.doneToday && c.deadlineDate && c.deadlineDate < appToday();
+
     const icon = document.createElement('div');
     icon.className = 'card-status-icon';
-    icon.textContent = c.achieved ? '🏆' : c.doneToday ? '✅' : (LABEL_ICONS[c.label] || '📌');
+    icon.textContent = c.achieved ? '🏆' : c.doneToday ? '✅' : overdue ? '⏰' : (LABEL_ICONS[c.label] || '📌');
     icon.setAttribute('aria-hidden', 'true');
 
     const body = document.createElement('div'); body.className = 'headline-body';
@@ -947,8 +1000,14 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
       ${badgesHtml ? `<div class="card-badges">${badgesHtml}</div>` : ''}
     `;
 
-    const miniStrip = buildWeekStrip(c);
-    miniStrip.classList.add('mini');
+    // Unlike the compact week-strip (a fixed-width row of dots), the
+    // deadline status is a variable-length sentence -- it belongs stacked
+    // inside the body with the name and badges, not squeezed in as a
+    // fixed-width sibling next to the chevron, or long titles get crushed
+    // into an unreadable mid-word wrap.
+    if(isDeadline){
+      body.appendChild(buildDeadlineStatus(c));
+    }
 
     const chevron = document.createElement('div');
     chevron.className = 'headline-chevron';
@@ -957,7 +1016,11 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
 
     li.appendChild(icon);
     li.appendChild(body);
-    li.appendChild(miniStrip);
+    if(!isDeadline){
+      const miniStrip = buildWeekStrip(c);
+      miniStrip.classList.add('mini');
+      li.appendChild(miniStrip);
+    }
     li.appendChild(chevron);
 
     li.setAttribute('role', 'button');
@@ -980,10 +1043,12 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     const owned = canEditCommit(c);
     const canPaw = c.for !== currentUser && c.for !== 'both';
     const badgesHtml = commitBadgesHtml(c);
+    const isDeadline = isDeadlineSchedule(c);
+    const overdue = isDeadline && !c.doneToday && c.deadlineDate && c.deadlineDate < appToday();
 
     detailBody.innerHTML = `
       <div class="detail-header">
-        <div class="detail-icon">${c.achieved ? '🏆' : c.doneToday ? '✅' : (LABEL_ICONS[c.label] || '📌')}</div>
+        <div class="detail-icon">${c.achieved ? '🏆' : c.doneToday ? '✅' : overdue ? '⏰' : (LABEL_ICONS[c.label] || '📌')}</div>
         <div>
           <h2 class="detail-name">${escapeHtml(c.text)}</h2>
           ${badgesHtml ? `<div class="card-badges">${badgesHtml}</div>` : ''}
@@ -996,7 +1061,9 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
       const markBtn = document.createElement('button');
       markBtn.type = 'button';
       markBtn.className = 'detail-mark-btn' + (c.doneToday ? ' is-done' : '');
-      markBtn.textContent = c.doneToday ? '✅ Marked done today — tap to undo' : 'Mark done for today';
+      markBtn.textContent = c.doneToday
+        ? (isDeadline ? '✅ Completed — tap to undo' : '✅ Marked done today — tap to undo')
+        : (isDeadline ? 'Mark as done' : 'Mark done for today');
       markBtn.addEventListener('click', ()=>{
         toggleCommitDone(c);
         openCommitDetail(c);
@@ -1004,7 +1071,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
       detailBody.appendChild(markBtn);
     }
 
-    detailBody.appendChild(buildWeekStrip(c));
+    detailBody.appendChild(isDeadline ? buildDeadlineStatus(c) : buildWeekStrip(c));
 
     if(c.target){
       const progress = document.createElement('div'); progress.className = 'card-progress';
@@ -1298,6 +1365,8 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
       customDays.style.display = commit.schedule === 'custom' ? 'block' : 'none';
       document.querySelectorAll('#customDays input[name="commitDay"]').forEach(input => input.checked = false);
     }
+    if(commitDeadlineRow) commitDeadlineRow.style.display = commit.schedule === 'deadline' ? 'block' : 'none';
+    if(commitDeadlineDate) commitDeadlineDate.value = commit.deadlineDate || '';
     commitLabel.value = commit.label || '';
     commitTarget.value = commit.target || '';
     commitJoint.checked = commit.for === 'both';
@@ -1358,6 +1427,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     local.weeklyTarget = r.weeklyTarget;
     local.label = r.label;
     local.target = r.target;
+    local.deadlineDate = r.deadlineDate || null;
     local.history = history;
     local.createdAt = r.createdAt || local.createdAt || appToday();
     local.pawCount = r.pawCount;
@@ -1515,6 +1585,8 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     commitSchedule.value = 'daily';
     customDays.style.display = 'none';
     document.querySelectorAll('#customDays input[name="commitDay"]').forEach(input=>input.checked=false);
+    if(commitDeadlineRow) commitDeadlineRow.style.display = 'none';
+    if(commitDeadlineDate){ commitDeadlineDate.value = ''; commitDeadlineDate.min = appToday(); }
     commitLabel.value = '';
     commitTarget.value = '';
     commitJoint.checked = false;
@@ -1549,7 +1621,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     const selectedTile = wizLabelGrid.querySelector('.label-tile.selected');
     const label = selectedTile ? selectedTile.dataset.label : '';
     const text = wizText.value.trim() || '(untitled)';
-    const scheduleDesc = getScheduleDescription({ schedule: wizSchedule.value, scheduleDays: wizardCustomDaysSelected() });
+    const scheduleDesc = getScheduleDescription({ schedule: wizSchedule.value, scheduleDays: wizardCustomDaysSelected(), deadlineDate: wizDeadlineDate.value || null });
     wizSummary.innerHTML = `
       <p class="card-name">${escapeHtml(text)}</p>
       <p class="small muted">${label ? (LABEL_ICONS[label] || '') + ' ' + escapeHtml(label) + ' · ' : ''}${scheduleDesc}</p>
@@ -1571,6 +1643,8 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     wizSchedule.value = 'daily';
     wizCustomDays.style.display = 'none';
     wizCustomDays.querySelectorAll('input[name="wizDay"]').forEach(i => i.checked = false);
+    if(wizDeadlineRow) wizDeadlineRow.style.display = 'none';
+    if(wizDeadlineDate){ wizDeadlineDate.value = ''; wizDeadlineDate.min = appToday(); }
     wizLabelGrid.querySelectorAll('.label-tile').forEach(t => t.classList.remove('selected'));
     wizJoint.checked = false;
     wizStartDate.value = '';
@@ -1588,6 +1662,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
 
   wizSchedule.addEventListener('change', ()=>{
     wizCustomDays.style.display = wizSchedule.value === 'custom' ? 'block' : 'none';
+    if(wizDeadlineRow) wizDeadlineRow.style.display = wizSchedule.value === 'deadline' ? 'block' : 'none';
   });
 
   wizBack.addEventListener('click', ()=>{
@@ -1606,12 +1681,17 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
       scheduleDays = wizardCustomDaysSelected();
       if(scheduleDays.length === 0){ alert('Select at least one day for a custom schedule'); wizardShowStep(3); return; }
     }
+    let deadlineDate = null;
+    if(schedule === 'deadline'){
+      deadlineDate = wizDeadlineDate.value || null;
+      if(!deadlineDate){ alert('Pick a deadline date.'); wizardShowStep(3); return; }
+    }
     const startDate = wizStartDate.value || null;
     const weeklyTarget = schedule === 'twice' ? 2 : (schedule === 'three' ? 3 : (schedule === 'four' ? 4 : null));
 
     const commitItem = {
       id: uid(), text, for: forUser, enabled: true, doneToday: false, schedule, scheduleDays,
-      streak: 0, lastDone: null, remoteId: null, history: [], label, target: null,
+      deadlineDate, streak: 0, lastDone: null, remoteId: null, history: [], label, target: null,
       reminderEnabled: false, reminderTime: null, paws: 0, comments: [], weeklyTarget,
       createdAt: startDate || appToday()
     };
@@ -1628,6 +1708,10 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
     if(wizardStep === 2 && !wizText.value.trim()){ alert('Give it a name first.'); return; }
     if(wizardStep === 3 && wizSchedule.value === 'custom' && wizardCustomDaysSelected().length === 0){
       alert('Select at least one day for a custom schedule.');
+      return;
+    }
+    if(wizardStep === 3 && wizSchedule.value === 'deadline' && !wizDeadlineDate.value){
+      alert('Pick a deadline date.');
       return;
     }
     if(wizardStep < WIZARD_TOTAL_STEPS) wizardShowStep(wizardStep + 1);
@@ -1971,6 +2055,11 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
       scheduleDays = Array.from(document.querySelectorAll('#customDays input[name="commitDay"]:checked')).map(i=>i.value);
       if(scheduleDays.length === 0){ alert('Select at least one day for a custom schedule'); return; }
     }
+    let deadlineDate = null;
+    if(schedule === 'deadline'){
+      deadlineDate = commitDeadlineDate && commitDeadlineDate.value ? commitDeadlineDate.value : null;
+      if(!deadlineDate){ alert('Pick a deadline date.'); return; }
+    }
     const label = commitLabel ? (commitLabel.value.trim() || null) : null;
     const target = commitTarget ? (commitTarget.value ? parseInt(commitTarget.value,10) : null) : null;
     const startDate = commitStartDate && commitStartDate.value ? commitStartDate.value : null;
@@ -1987,6 +2076,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
         commitItem.enabled = enabled;
         commitItem.schedule = schedule;
         commitItem.scheduleDays = scheduleDays;
+        commitItem.deadlineDate = deadlineDate;
         commitItem.label = label;
         commitItem.target = target;
         commitItem.createdAt = startDate || commitItem.createdAt;
@@ -1997,7 +2087,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, getScheduleDescription, countCo
         scheduleReminderFor(commitItem);
       }
     } else {
-      commitItem = { id: uid(), text, for: forUser, enabled, doneToday:false, schedule, scheduleDays, streak:0, lastDone:null, remoteId:null, history: [], label, target, reminderEnabled, reminderTime, paws:0, comments: [], weeklyTarget, createdAt: startDate || appToday() };
+      commitItem = { id: uid(), text, for: forUser, enabled, doneToday:false, schedule, scheduleDays, deadlineDate, streak:0, lastDone:null, remoteId:null, history: [], label, target, reminderEnabled, reminderTime, paws:0, comments: [], weeklyTarget, createdAt: startDate || appToday() };
       state.commitments.push(commitItem);
       scheduleReminderFor(commitItem);
     }

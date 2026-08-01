@@ -792,6 +792,31 @@ button.menu-item:hover {
   box-shadow: 0 0 0 1.5px var(--accent-soft);
 }
 
+/* One-off deadline commitments show a countdown/overdue line instead of a
+   week strip -- there's no "recent pattern" for a single event. */
+.deadline-status {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.deadline-status.is-complete {
+  color: var(--secondary-dark);
+}
+
+.deadline-status.is-overdue {
+  color: var(--danger);
+}
+
+.deadline-status.is-due-today {
+  color: var(--accent-dark);
+}
+
+.commit-headline .deadline-status {
+  flex: 0 0 auto;
+}
+
 .progress-bar {
   width: 100%;
   height: 8px;

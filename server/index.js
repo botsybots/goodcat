@@ -163,7 +163,7 @@ app.get('/api/commitments', authMiddleware, async (req,res)=>{
     const rows = await dbAll(`
       SELECT c.id, c.text, c.enabled, c.doneToday, c.schedule, c.scheduleDays,
              c.reminderEnabled, c.reminderTime, c.weeklyTarget, c.streak, c.lastDone,
-             c.label, c.target, c.achieved, c.achievedAt, c.createdAt, c.scope, c.user_id as ownerId, u.name as ownerName
+             c.label, c.target, c.achieved, c.achievedAt, c.createdAt, c.scope, c.deadlineDate, c.user_id as ownerId, u.name as ownerName
       FROM commitments c
       JOIN users u ON u.id = c.user_id
       WHERE LOWER(u.name) IN ('anna','jordan')
@@ -195,6 +195,7 @@ app.get('/api/commitments', authMiddleware, async (req,res)=>{
         achieved: !!r.achieved,
         achievedAt: r.achievedAt,
         createdAt: r.createdAt,
+        deadlineDate: r.deadlineDate || null,
         ownerId: r.ownerId,
         for: r.scope === 'joint' ? 'both' : (r.ownerName || '').toLowerCase(),
         mine: r.scope === 'joint' || r.ownerId === req.user.id,
@@ -212,16 +213,17 @@ app.get('/api/commitments', authMiddleware, async (req,res)=>{
 });
 
 app.post('/api/commitments', authMiddleware, async (req,res)=>{
-  const { text, enabled, schedule, scheduleDays, reminderEnabled, reminderTime, weeklyTarget, label, target, achieved, achievedAt, createdAt, scope } = req.body;
+  const { text, enabled, schedule, scheduleDays, reminderEnabled, reminderTime, weeklyTarget, label, target, achieved, achievedAt, createdAt, scope, deadlineDate } = req.body;
   const scheduleDaysJson = scheduleDays ? JSON.stringify(scheduleDays) : null;
   const createdAtVal = createdAt || localDateKey(new Date());
   const scopeVal = scope === 'joint' ? 'joint' : 'personal';
+  const deadlineDateVal = schedule === 'deadline' ? (deadlineDate || null) : null;
   try{
     const result = await dbRun(
-      'INSERT INTO commitments (user_id,text,enabled,doneToday,schedule,scheduleDays,reminderEnabled,reminderTime,weeklyTarget,streak,lastDone,label,target,achieved,achievedAt,createdAt,scope) VALUES (?,?,?,?,?,?,?,?,?,0,NULL,?,?,?,?,?,?)',
-      [req.user.id, text, enabled?1:0, 0, schedule||'daily', scheduleDaysJson, reminderEnabled?1:0, reminderTime||null, weeklyTarget||null, label||null, target||null, achieved?1:0, achievedAt||null, createdAtVal, scopeVal]
+      'INSERT INTO commitments (user_id,text,enabled,doneToday,schedule,scheduleDays,reminderEnabled,reminderTime,weeklyTarget,streak,lastDone,label,target,achieved,achievedAt,createdAt,scope,deadlineDate) VALUES (?,?,?,?,?,?,?,?,?,0,NULL,?,?,?,?,?,?,?)',
+      [req.user.id, text, enabled?1:0, 0, schedule||'daily', scheduleDaysJson, reminderEnabled?1:0, reminderTime||null, weeklyTarget||null, label||null, target||null, achieved?1:0, achievedAt||null, createdAtVal, scopeVal, deadlineDateVal]
     );
-    res.json({ id: result.lastID, text, enabled: !!enabled, doneToday:false, schedule: schedule||'daily', scheduleDays: scheduleDays || null, reminderEnabled: !!reminderEnabled, reminderTime: reminderTime || null, weeklyTarget: weeklyTarget || null, streak:0, lastDone:null, label: label||null, target: target||null, achieved: !!achieved, achievedAt: achievedAt||null, createdAt: createdAtVal, scope: scopeVal });
+    res.json({ id: result.lastID, text, enabled: !!enabled, doneToday:false, schedule: schedule||'daily', scheduleDays: scheduleDays || null, reminderEnabled: !!reminderEnabled, reminderTime: reminderTime || null, weeklyTarget: weeklyTarget || null, streak:0, lastDone:null, label: label||null, target: target||null, achieved: !!achieved, achievedAt: achievedAt||null, createdAt: createdAtVal, scope: scopeVal, deadlineDate: deadlineDateVal });
   }catch(e){
     res.status(500).json({ error: 'db' });
   }
@@ -229,7 +231,7 @@ app.post('/api/commitments', authMiddleware, async (req,res)=>{
 
 app.put('/api/commitments/:id', authMiddleware, async (req,res)=>{
   const id = req.params.id;
-  const { text, enabled, doneToday, schedule, scheduleDays, reminderEnabled, reminderTime, weeklyTarget, label, target, createdAt, scope } = req.body;
+  const { text, enabled, doneToday, schedule, scheduleDays, reminderEnabled, reminderTime, weeklyTarget, label, target, createdAt, scope, deadlineDate } = req.body;
   const scheduleDaysJson = scheduleDays ? JSON.stringify(scheduleDays) : null;
   try{
     // A joint commitment belongs to both people, not just whichever of them
@@ -249,13 +251,24 @@ app.put('/api/commitments/:id', authMiddleware, async (req,res)=>{
       const today = localDateKey(new Date());
       const effectiveScheduleDays = scheduleDays !== undefined ? scheduleDays : (row.scheduleDays ? JSON.parse(row.scheduleDays) : null);
       const effectiveScheduleDaysJson = effectiveScheduleDays ? JSON.stringify(effectiveScheduleDays) : null;
-      const commitForStreak = { schedule: schedule || row.schedule, scheduleDays: effectiveScheduleDays };
+      const effectiveSchedule = schedule || row.schedule;
+      const isDeadline = effectiveSchedule === 'deadline';
+      const commitForStreak = { schedule: effectiveSchedule, scheduleDays: effectiveScheduleDays };
 
-      // Not scoped by user_id: a joint commitment is done for the day the
-      // moment either person marks it, and either can undo it -- and for a
-      // personal commitment every row here already belongs to its one
-      // owner anyway, so this is equally correct for both.
-      if (doneToday) {
+      if (isDeadline) {
+        // A one-off commitment gets at most one completion_log row ever,
+        // regardless of which actual day it was marked done on (which may
+        // be well before the deadline itself) -- not a per-day log like
+        // recurring habits, so mark-done/undo always replaces it wholesale.
+        await dbRun('DELETE FROM completion_log WHERE commitment_id = ?', [id]);
+        if (doneToday) {
+          await dbRun('INSERT INTO completion_log (commitment_id, user_id, date, count) VALUES (?,?,?,1)', [id, req.user.id, today]);
+        }
+      } else if (doneToday) {
+        // Not scoped by user_id: a joint commitment is done for the day the
+        // moment either person marks it, and either can undo it -- and for a
+        // personal commitment every row here already belongs to its one
+        // owner anyway, so this is equally correct for both.
         await dbRun('INSERT INTO completion_log (commitment_id, user_id, date, count) VALUES (?,?,?,1) ON CONFLICT(commitment_id, date) DO UPDATE SET count = count + 1', [id, req.user.id, today]);
       } else {
         await dbRun('DELETE FROM completion_log WHERE commitment_id = ? AND date = ?', [id, today]);
@@ -274,9 +287,10 @@ app.put('/api/commitments/:id', authMiddleware, async (req,res)=>{
         achieved = false;
         achievedAt = null;
       }
+      const deadlineDateVal = isDeadline && deadlineDate !== undefined ? deadlineDate : null;
       await dbRun(
-        'UPDATE commitments SET text = ?, enabled = ?, doneToday = ?, schedule = ?, scheduleDays = ?, reminderEnabled = ?, reminderTime = ?, weeklyTarget = ?, streak = ?, lastDone = ?, label = ?, target = ?, achieved = ?, achievedAt = ?, createdAt = COALESCE(?, createdAt), scope = ? WHERE id = ?',
-        [text, enabled?1:0, doneToday?1:0, schedule||row.schedule||null, effectiveScheduleDaysJson, reminderEnabled?1:0, reminderTime||null, weeklyTarget||null, newStreak, newLast, label||null, targetVal||null, achieved?1:0, achievedAt, createdAt||null, scopeVal, id]
+        'UPDATE commitments SET text = ?, enabled = ?, doneToday = ?, schedule = ?, scheduleDays = ?, reminderEnabled = ?, reminderTime = ?, weeklyTarget = ?, streak = ?, lastDone = ?, label = ?, target = ?, achieved = ?, achievedAt = ?, createdAt = COALESCE(?, createdAt), scope = ?, deadlineDate = COALESCE(?, deadlineDate) WHERE id = ?',
+        [text, enabled?1:0, doneToday?1:0, effectiveSchedule||null, effectiveScheduleDaysJson, reminderEnabled?1:0, reminderTime||null, weeklyTarget||null, newStreak, newLast, label||null, targetVal||null, achieved?1:0, achievedAt, createdAt||null, scopeVal, deadlineDateVal, id]
       );
 
       // XP only moves on an actual done/undone transition, not a resend of
@@ -296,9 +310,10 @@ app.put('/api/commitments/:id', authMiddleware, async (req,res)=>{
       }
       res.json({ success:true, streak:newStreak, lastDone:newLast, achieved, achievedAt, xp });
     } else {
+      const deadlineDateVal = schedule === 'deadline' && deadlineDate !== undefined ? deadlineDate : null;
       await dbRun(
-        'UPDATE commitments SET text = ?, enabled = ?, schedule = ?, scheduleDays = ?, reminderEnabled = ?, reminderTime = ?, weeklyTarget = ?, label = ?, target = ?, createdAt = COALESCE(?, createdAt), scope = ? WHERE id = ?',
-        [text, enabled?1:0, schedule||null, scheduleDaysJson, reminderEnabled?1:0, reminderTime||null, weeklyTarget||null, label||null, target||null, createdAt||null, scopeVal, id]
+        'UPDATE commitments SET text = ?, enabled = ?, schedule = ?, scheduleDays = ?, reminderEnabled = ?, reminderTime = ?, weeklyTarget = ?, label = ?, target = ?, createdAt = COALESCE(?, createdAt), scope = ?, deadlineDate = COALESCE(?, deadlineDate) WHERE id = ?',
+        [text, enabled?1:0, schedule||null, scheduleDaysJson, reminderEnabled?1:0, reminderTime||null, weeklyTarget||null, label||null, target||null, createdAt||null, scopeVal, deadlineDateVal, id]
       );
       res.json({ success: true });
     }
@@ -546,9 +561,21 @@ app.get('/api/leaderboard/weekly', authMiddleware, async (req,res)=>{
     const users = (await dbAll('SELECT id, name FROM users')).filter(u => ['anna','jordan'].includes((u.name||'').toLowerCase()));
     const result = {};
     for(const user of users){
-      const commits = await dbAll("SELECT id, schedule, scheduleDays FROM commitments WHERE (user_id = ? OR scope = 'joint') AND enabled = 1", [user.id]);
+      const commits = await dbAll("SELECT id, schedule, scheduleDays, deadlineDate FROM commitments WHERE (user_id = ? OR scope = 'joint') AND enabled = 1", [user.id]);
       let scheduled = 0, completed = 0;
       for(const c of commits){
+        // A one-off deadline commitment only counts in the week its deadline
+        // falls in, and "completed" means it was ever marked done at all --
+        // not specifically on the deadline date, since it may well have been
+        // finished early. See the PUT handler's single-row completion_log
+        // handling for deadline commitments.
+        if(c.schedule === 'deadline'){
+          if(!c.deadlineDate || !weekDatesSoFar.includes(c.deadlineDate)) continue;
+          scheduled += 1;
+          const doneRow = await dbGet('SELECT COUNT(*) as count FROM completion_log WHERE commitment_id = ?', [c.id]);
+          if(doneRow && doneRow.count > 0) completed += 1;
+          continue;
+        }
         const scheduleDays = c.scheduleDays ? JSON.parse(c.scheduleDays) : null;
         const dueDates = weekDatesSoFar.filter(d => isScheduledDay({ schedule: c.schedule, scheduleDays }, d));
         if(!dueDates.length) continue;
@@ -589,7 +616,7 @@ function sendPushToSubscriptions(subscriptions, payload){
 async function checkDueReminders(){
   const now = new Date();
   try{
-    const commits = await dbAll('SELECT id, user_id, text, reminderEnabled, reminderTime, schedule, scheduleDays, enabled, lastReminderSent, scope FROM commitments WHERE reminderEnabled = 1 AND reminderTime IS NOT NULL');
+    const commits = await dbAll('SELECT id, user_id, text, reminderEnabled, reminderTime, schedule, scheduleDays, deadlineDate, enabled, lastReminderSent, scope FROM commitments WHERE reminderEnabled = 1 AND reminderTime IS NOT NULL');
     for(const commit of commits){
       commit.scheduleDays = commit.scheduleDays ? JSON.parse(commit.scheduleDays) : null;
       if(!shouldSendReminder(commit, now)) continue;
@@ -624,8 +651,8 @@ async function checkEndOfDayReminders(){
     for(const user of users){
       if(user.lastEndOfDaySent === today) continue;
       await dbRun('UPDATE users SET lastEndOfDaySent = ? WHERE id = ?', [today, user.id]);
-      const commits = await dbAll("SELECT schedule, scheduleDays, doneToday FROM commitments WHERE (user_id = ? OR scope = 'joint') AND enabled = 1", [user.id]);
-      const incomplete = commits.some(c => isScheduledDay({ schedule: c.schedule, scheduleDays: c.scheduleDays ? JSON.parse(c.scheduleDays) : null }, today) && !c.doneToday);
+      const commits = await dbAll("SELECT schedule, scheduleDays, deadlineDate, doneToday FROM commitments WHERE (user_id = ? OR scope = 'joint') AND enabled = 1", [user.id]);
+      const incomplete = commits.some(c => isScheduledDay({ schedule: c.schedule, scheduleDays: c.scheduleDays ? JSON.parse(c.scheduleDays) : null, deadlineDate: c.deadlineDate }, today) && !c.doneToday);
       if(!incomplete) continue;
       const rows = await dbAll('SELECT subscription FROM push_subscriptions WHERE user_id = ?', [user.id]);
       if(!rows.length) continue;

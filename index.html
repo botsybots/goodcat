@@ -197,6 +197,7 @@
               <option value="three">Three times a week</option>
               <option value="four">Four times a week</option>
               <option value="custom">Custom</option>
+              <option value="deadline">One-off, due by a date</option>
             </select>
             <div id="wizCustomDays" style="display:none;" class="custom-days full-width">
               <label class="small muted">Select days</label>
@@ -209,6 +210,11 @@
                 <label><input type="checkbox" name="wizDay" value="sat"/><span>Sat</span></label>
                 <label><input type="checkbox" name="wizDay" value="sun"/><span>Sun</span></label>
               </div>
+            </div>
+            <div id="wizDeadlineRow" style="display:none;" class="full-width">
+              <label class="small muted" for="wizDeadlineDate">Due by</label>
+              <input id="wizDeadlineDate" class="small-input" type="date" />
+              <p class="small muted">Missing this date costs a life, same as any other missed commitment.</p>
             </div>
           </div>
 
@@ -248,6 +254,7 @@
               <option value="three">Three times a week</option>
               <option value="four">Four times a week</option>
               <option value="custom">Custom</option>
+              <option value="deadline">One-off, due by a date</option>
             </select>
             <div id="customDays" style="display:none;" class="custom-days full-width">
               <label class="small muted">Select days</label>
@@ -260,6 +267,10 @@
                 <label><input type="checkbox" name="commitDay" value="sat"/><span>Sat</span></label>
                 <label><input type="checkbox" name="commitDay" value="sun"/><span>Sun</span></label>
               </div>
+            </div>
+            <div id="commitDeadlineRow" style="display:none;" class="full-width">
+              <label class="small muted" for="commitDeadlineDate">Due by</label>
+              <input id="commitDeadlineDate" class="small-input" type="date" />
             </div>
             <select id="commitLabel" class="full-width">
               <option value="">No label</option>

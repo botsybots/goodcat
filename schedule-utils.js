@@ -13,9 +13,18 @@ export function isWeeklyTargetSchedule(commit){
   return !!commit && WEEKLY_TARGET_SCHEDULES.includes(commit.schedule);
 }
 
+// A one-off commitment is only ever "due" on its single deadline date --
+// never before, never after -- unlike every other schedule type here, which
+// recurs. See computeStreak()'s early return for why streak logic must never
+// be run against one of these.
+export function isDeadlineSchedule(commit){
+  return !!commit && commit.schedule === 'deadline';
+}
+
 export function isScheduledDay(commit, isoDate){
   if(!commit || !isoDate) return false;
   if(isWeeklyTargetSchedule(commit)) return true;
+  if(isDeadlineSchedule(commit)) return !!commit.deadlineDate && commit.deadlineDate === isoDate;
   const day = getDayKey(isoDate);
   if(commit.schedule === 'daily') return true;
   if(commit.schedule === 'weekdays') return ['mon','tue','wed','thu','fri'].includes(day);
@@ -31,6 +40,7 @@ export function getScheduleDescription(commit){
   if(commit.schedule === 'three') return 'Three times a week (any 3 days)';
   if(commit.schedule === 'four') return 'Four times a week (any 4 days)';
   if(commit.schedule === 'custom' && Array.isArray(commit.scheduleDays)) return `Custom: ${commit.scheduleDays.join(', ')}`;
+  if(commit.schedule === 'deadline') return commit.deadlineDate ? `One-off — due ${commit.deadlineDate}` : 'One-off with a deadline';
   return 'Daily';
 }
 
@@ -47,6 +57,11 @@ export function countCompletionsThisWeek(commit, refDate){
 // disagree about what counts as a current streak.
 export function computeStreak(commit, historyDates, asOfIso){
   if(!commit) return 0;
+  // A one-off deadline commitment is due on exactly one date, which may be
+  // in the future -- walking backward from asOfIso looking for a scheduled
+  // day would never find one and loop forever. Streaks don't apply to a
+  // single event anyway, so short-circuit to 0.
+  if(isDeadlineSchedule(commit)) return 0;
   const history = new Set(historyDates || []);
   const cursor = parseLocalDate(asOfIso);
   if(!cursor) return 0;
