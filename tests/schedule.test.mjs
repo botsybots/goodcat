@@ -205,13 +205,23 @@ test('computeStreak: a tracker always reads 0, since its history holds bad days 
   assertEqual(computeStreak(c, [], '2026-07-31'), 0);
 });
 
-test('isWeeklyTargetSchedule identifies twice/three/four but not daily/weekdays/custom', () => {
+test('isWeeklyTargetSchedule identifies once/twice/three/four but not daily/weekdays/custom', () => {
+  assertEqual(isWeeklyTargetSchedule({ schedule: 'once' }), true);
   assertEqual(isWeeklyTargetSchedule({ schedule: 'twice' }), true);
   assertEqual(isWeeklyTargetSchedule({ schedule: 'three' }), true);
   assertEqual(isWeeklyTargetSchedule({ schedule: 'four' }), true);
   assertEqual(isWeeklyTargetSchedule({ schedule: 'daily' }), false);
   assertEqual(isWeeklyTargetSchedule({ schedule: 'weekdays' }), false);
   assertEqual(isWeeklyTargetSchedule({ schedule: 'custom' }), false);
+});
+
+test('getScheduleDescription: describes "once a week" as any 1 day', () => {
+  assertEqual(getScheduleDescription({ schedule: 'once' }), 'Once a week (any 1 day)');
+});
+
+test('computeWeeklyStreak: "once a week" is satisfied by a single day in the week', () => {
+  const c = { schedule: 'once', weeklyTarget: 1 };
+  assertEqual(computeWeeklyStreak(c, ['2026-07-29'], '2026-07-31'), 1);
 });
 
 // --- schedule-utils: countCompletionsThisWeek ---

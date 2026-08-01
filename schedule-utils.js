@@ -1,14 +1,14 @@
 import { getDayKey, localDateKey, parseLocalDate, weekStartDate, nextLocalDate } from './date-utils.js';
 
-const WEEKLY_TARGET_SCHEDULES = ['twice', 'three', 'four'];
+const WEEKLY_TARGET_SCHEDULES = ['once', 'twice', 'three', 'four'];
 
 export const LABEL_CATEGORIES = ['Health', 'Fitness', 'Education', 'Home', 'Money', 'Social', 'Relationship'];
 
-// "Twice/three/four a week" schedules are satisfied by completing the habit
-// on any N days of the week — they are not pinned to specific weekdays.
-// Missed-day and streak tracking for these therefore has to happen per week
-// rather than per day; see computeWeeklyStreak() and the weekly life-loss
-// check in app.js's updateLivesForUser().
+// "Once/twice/three/four a week" schedules are satisfied by completing the
+// habit on any N days of the week — they are not pinned to specific
+// weekdays. Missed-day and streak tracking for these therefore has to
+// happen per week rather than per day; see computeWeeklyStreak() and the
+// weekly life-loss check in app.js's updateLivesForUser().
 export function isWeeklyTargetSchedule(commit){
   return !!commit && WEEKLY_TARGET_SCHEDULES.includes(commit.schedule);
 }
@@ -55,6 +55,7 @@ export function getScheduleDescription(commit){
   if(!commit) return 'Daily';
   if(commit.schedule === 'daily') return 'Daily';
   if(commit.schedule === 'weekdays') return 'Weekdays (Mon–Fri)';
+  if(commit.schedule === 'once') return 'Once a week (any 1 day)';
   if(commit.schedule === 'twice') return 'Twice a week (any 2 days)';
   if(commit.schedule === 'three') return 'Three times a week (any 3 days)';
   if(commit.schedule === 'four') return 'Four times a week (any 4 days)';

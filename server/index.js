@@ -338,6 +338,70 @@ app.get('/api/commitments/:id/history', authMiddleware, async (req,res)=>{
   }
 });
 
+// Backfill a SPECIFIC past date as done/undone -- for when you (or your
+// partner) genuinely did it but forgot to mark it at the time. Deliberately
+// separate from the doneToday PUT branch above (which always operates on
+// "today" and recomputes XP off the commitment's live doneToday column,
+// which has no meaning for an arbitrary past date) rather than generalizing
+// it. Not available for trackers -- their XP is only ever charged in real
+// time via /log, and backfilling isn't meant to relitigate that.
+app.put('/api/commitments/:id/history/:date', authMiddleware, async (req,res)=>{
+  const id = req.params.id;
+  const date = req.params.date;
+  const { done } = req.body;
+  try{
+    const owner = await dbGet('SELECT user_id, scope, schedule, scheduleDays, target, achieved, achievedAt FROM commitments WHERE id = ?', [id]);
+    if(!owner || (owner.user_id !== req.user.id && owner.scope !== 'joint')) return res.status(404).json({ error: 'not found' });
+    if(owner.schedule === 'tracker') return res.status(400).json({ error: 'backfilling is not supported for trackers' });
+    const today = localDateKey(new Date());
+    if(!date || date >= today) return res.status(400).json({ error: 'can only backfill a date before today' });
+
+    const existing = await dbGet('SELECT date FROM completion_log WHERE commitment_id = ? AND date = ?', [id, date]);
+    const wasDone = !!existing;
+    if(done && !wasDone){
+      await dbRun('INSERT INTO completion_log (commitment_id, user_id, date, count) VALUES (?,?,?,1)', [id, req.user.id, date]);
+    } else if(!done && wasDone){
+      await dbRun('DELETE FROM completion_log WHERE commitment_id = ? AND date = ?', [id, date]);
+    }
+
+    const historyRows = await dbAll('SELECT date FROM completion_log WHERE commitment_id = ?', [id]);
+    const historyDates = historyRows.map(r => r.date);
+    const scheduleDays = owner.scheduleDays ? JSON.parse(owner.scheduleDays) : null;
+    const newStreak = computeStreak({ schedule: owner.schedule, scheduleDays }, historyDates, today);
+    const newLast = historyDates.length ? historyDates.reduce((a, b) => (a > b ? a : b)) : null;
+
+    let achieved = !!owner.achieved;
+    let achievedAt = owner.achievedAt || null;
+    if(owner.target && newStreak >= owner.target){
+      if(!achieved){ achieved = true; achievedAt = today; }
+    } else if(owner.target){
+      achieved = false;
+      achievedAt = null;
+    }
+    await dbRun('UPDATE commitments SET streak = ?, lastDone = ?, achieved = ?, achievedAt = ? WHERE id = ?', [newStreak, newLast, achieved?1:0, achievedAt, id]);
+
+    // Same 10 XP as marking a habit done/undone live -- a backfilled day
+    // that genuinely happened earns the same credit, just late.
+    let xp = null;
+    if(done !== wasDone){
+      const delta = done ? 10 : -10;
+      const isJoint = owner.scope === 'joint';
+      if(isJoint){
+        await dbRun("UPDATE users SET xp = MAX(0, COALESCE(xp,0) + ?) WHERE LOWER(name) IN ('anna','jordan')", [delta]);
+      } else {
+        await dbRun('UPDATE users SET xp = MAX(0, COALESCE(xp,0) + ?) WHERE id = ?', [delta, req.user.id]);
+      }
+      const xpRow = await dbGet('SELECT xp FROM users WHERE id = ?', [req.user.id]);
+      xp = xpRow ? xpRow.xp : null;
+    }
+
+    res.json({ success: true, streak: newStreak, lastDone: newLast, achieved, achievedAt, xp });
+  }catch(e){
+    console.error('PUT /api/commitments/:id/history/:date error', e);
+    res.status(500).json({ error: 'db' });
+  }
+});
+
 // Reset a tracker's running clock -- unlike doneToday (a toggle, one row per
 // day), a tracker can be logged multiple times a day and never "undone" the
 // same way, so it gets its own endpoint rather than overloading the
@@ -560,7 +624,7 @@ app.post('/api/suggestions/:id/accept', authMiddleware, async (req,res)=>{
     const scheduleDays = overrides.scheduleDays !== undefined ? overrides.scheduleDays : (suggestion.scheduleDays ? JSON.parse(suggestion.scheduleDays) : null);
     const label = overrides.label !== undefined ? overrides.label : suggestion.label;
     const scheduleDaysJson = scheduleDays ? JSON.stringify(scheduleDays) : null;
-    const weeklyTarget = schedule === 'twice' ? 2 : (schedule === 'three' ? 3 : (schedule === 'four' ? 4 : null));
+    const weeklyTarget = schedule === 'once' ? 1 : (schedule === 'twice' ? 2 : (schedule === 'three' ? 3 : (schedule === 'four' ? 4 : null)));
     const createdAtVal = localDateKey(new Date());
     const result = await dbRun(
       'INSERT INTO commitments (user_id,text,enabled,doneToday,schedule,scheduleDays,weeklyTarget,streak,lastDone,label,createdAt) VALUES (?,?,1,0,?,?,?,0,NULL,?,?)',

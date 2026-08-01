@@ -533,6 +533,46 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
     return { total, compliant };
   }
 
+  // Backfilling a past date as done should actually undo the consequence,
+  // not just the record -- otherwise there's no real reason to bother.
+  // Checks whether the specific day (or the week it falls in, for a
+  // weekly-target schedule) had already cost a life, and refunds it if the
+  // day/week is now fully compliant as a result of the edit. Deliberately
+  // one-directional: un-marking a day doesn't retroactively charge a life
+  // (the day-walk in updateLivesForUser never revisits an already-evaluated
+  // day either way, so this mirrors that existing write-once behavior
+  // rather than introducing a new asymmetry).
+  function reevaluatePastDayForOneUser(userId, dayIso){
+    ensureLifeState();
+    if(state.lifeLosses[userId] && state.lifeLosses[userId][dayIso]){
+      const counts = getUserScheduledCountsForDate(userId, dayIso);
+      if(counts.scheduled > 0 && counts.done >= counts.scheduled){
+        delete state.lifeLosses[userId][dayIso];
+        state.lives[userId] = Math.min(MAX_LIVES, state.lives[userId] + 1);
+        if(userId === currentUser) showToast('Life refunded', `${userName(userId)} — that day's fully caught up now, so the life lost for it has been given back.`);
+      }
+    }
+    const weekStart = weekStartDate(parseLocalDate(dayIso));
+    const weekStartIso = localDateKey(weekStart);
+    if(state.weeklyLifeLosses[userId] && state.weeklyLifeLosses[userId][weekStartIso]){
+      const compliance = getUserWeeklyComplianceForWeek(userId, weekStart);
+      if(compliance.total > 0 && compliance.compliant >= compliance.total){
+        delete state.weeklyLifeLosses[userId][weekStartIso];
+        state.lives[userId] = Math.min(MAX_LIVES, state.lives[userId] + 1);
+        if(userId === currentUser) showToast('Life refunded', `${userName(userId)} — that week's fully caught up now, so the life lost for it has been given back.`);
+      }
+    }
+  }
+
+  function reevaluatePastDay(forValue, dayIso){
+    if(forValue === 'both'){
+      reevaluatePastDayForOneUser('anna', dayIso);
+      reevaluatePastDayForOneUser('jordan', dayIso);
+    } else {
+      reevaluatePastDayForOneUser(forValue, dayIso);
+    }
+  }
+
   function getWindowDates(endDate, windowSize = 7){
     const dates = [];
     let cursor = parseLocalDate(endDate);
@@ -2098,7 +2138,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
       if(!deadlineDate){ alert('Pick a deadline date.'); wizardShowStep(3); return; }
     }
     const startDate = wizStartDate.value || null;
-    const weeklyTarget = schedule === 'twice' ? 2 : (schedule === 'three' ? 3 : (schedule === 'four' ? 4 : null));
+    const weeklyTarget = schedule === 'once' ? 1 : (schedule === 'twice' ? 2 : (schedule === 'three' ? 3 : (schedule === 'four' ? 4 : null)));
     const lastLoggedAt = schedule === 'tracker' ? new Date().toISOString() : null;
 
     const commitItem = {
@@ -2401,7 +2441,47 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
     return out;
   }
 
-  function renderHeatmap(entries, days){
+  // Marks (or unmarks) one specific PAST date as done -- for backfilling a
+  // day you genuinely did but forgot to log at the time. Deliberately
+  // separate from toggleCommitDone(), which always operates on "today".
+  // Refunds a life via reevaluatePastDay() if that day (or its week, for a
+  // weekly-target schedule) had already cost one and is now fully compliant.
+  async function toggleHistoryDate(commit, dayIso, markDone){
+    if(!canEditCommit(commit)){
+      showToast('Not yours to edit', `Only ${userName(commit.for)} can edit "${commit.text}"'s history.`);
+      return;
+    }
+    commit.history = commit.history || [];
+    const idx = commit.history.indexOf(dayIso);
+    if(markDone && idx < 0) commit.history.push(dayIso);
+    else if(!markDone && idx >= 0) commit.history.splice(idx, 1);
+    else return; // already in the requested state
+    updateCommitStatusFromHistory(commit);
+    if(markDone) reevaluatePastDay(commit.for, dayIso);
+    save(state);
+    renderList();
+    showToast(markDone ? 'Marked done' : 'Marked undone', `Updated ${dayIso} for "${commit.text}".`);
+    if(isRemoteMode() && commit.remoteId){
+      try{
+        const res = await fetch(apiBase() + '/api/commitments/' + commit.remoteId + '/history/' + dayIso, {
+          method: 'PUT', headers: { 'content-type':'application/json', authorization: 'Bearer '+authToken },
+          body: JSON.stringify({ done: markDone })
+        });
+        if(res.ok){
+          const j = await res.json();
+          if(j.streak !== undefined) commit.streak = j.streak;
+          if(j.xp !== undefined && j.xp !== null){
+            state.usersXp = state.usersXp || {};
+            state.usersXp[currentUser] = j.xp;
+            renderLevels();
+          }
+          save(state);
+        }
+      }catch(e){ console.error('backfill push failed', e); }
+    }
+  }
+
+  function renderHeatmap(entries, days, commit, onChange){
     // entries: array of YYYY-MM-DD strings OR objects {date, count}
     const all = getLastNDates(days || 30);
     histHeatmap.innerHTML = '';
@@ -2415,6 +2495,13 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
     }
     // compute max for scaling
     let maxCount = 0; for(const v of map.values()) if(v>maxCount) maxCount = v;
+    // Backfilling only makes sense for a strictly past day (today has its
+    // own dedicated mark-done button in detail view) on a schedule where
+    // "done" is a simple yes/no per day -- not for trackers, whose history
+    // means something inverted (logged = bad), and whose XP/life stakes are
+    // only ever charged live via /log.
+    const canBackfill = commit && canEditCommit(commit) && !isTrackerSchedule(commit);
+    const today = appToday();
     all.forEach(day => {
       const el = document.createElement('div'); el.className='day';
       const count = map.get(day) || 0;
@@ -2423,7 +2510,21 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
         if(maxCount <= 1) level = 1; else level = Math.ceil((count / maxCount) * 3);
       }
       el.classList.add('level-' + level);
-      el.title = day + (count? ` — done x${count}` : '');
+      const isPast = day < today;
+      if(canBackfill && isPast){
+        el.classList.add('is-editable');
+        el.title = day + (count? ' — done (tap to unmark)' : ' — tap to mark done');
+        el.setAttribute('role', 'button');
+        el.setAttribute('tabindex', '0');
+        const toggle = async ()=>{
+          await toggleHistoryDate(commit, day, count === 0);
+          if(onChange) onChange();
+        };
+        el.addEventListener('click', toggle);
+        el.addEventListener('keydown', e => { if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); toggle(); } });
+      } else {
+        el.title = day + (count? ` — done x${count}` : '');
+      }
       histHeatmap.appendChild(el);
     });
   }
@@ -2432,15 +2533,18 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
     histModal.style.display='flex';
     histTitle.textContent = commit.text + ' — history';
     const zoomSelect = document.getElementById('histZoom');
+    const canBackfill = canEditCommit(commit) && !isTrackerSchedule(commit);
+    const hint = document.getElementById('histBackfillHint');
+    if(hint) hint.classList.toggle('hidden', !canBackfill);
     function renderForZoom(){
       const days = parseInt(zoomSelect.value,10) || 30;
       // prefer remote history if available
       if(authToken && commit.remoteId){
         fetch(apiBase() + '/api/commitments/' + commit.remoteId + '/history', { headers: { 'authorization': 'Bearer '+authToken } }).then(r=>r.ok? r.json() : Promise.resolve(null)).then(dates=>{
-          if(dates) renderHeatmap(dates, days); else renderHeatmap(commit.history||[], days);
-        }).catch(()=>{ renderHeatmap(commit.history||[], days); });
+          if(dates) renderHeatmap(dates, days, commit, renderForZoom); else renderHeatmap(commit.history||[], days, commit, renderForZoom);
+        }).catch(()=>{ renderHeatmap(commit.history||[], days, commit, renderForZoom); });
       } else {
-        renderHeatmap(commit.history||[], days);
+        renderHeatmap(commit.history||[], days, commit, renderForZoom);
       }
     }
     zoomSelect.removeEventListener('change', renderForZoom);
@@ -2477,7 +2581,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
     const startDate = commitStartDate && commitStartDate.value ? commitStartDate.value : null;
     const reminderEnabled = commitReminderEnabled ? !!commitReminderEnabled.checked : false;
     const reminderTime = commitReminderTime ? (commitReminderTime.value || null) : null;
-    const weeklyTarget = schedule === 'twice' ? 2 : (schedule === 'three' ? 3 : (schedule === 'four' ? 4 : null));
+    const weeklyTarget = schedule === 'once' ? 1 : (schedule === 'twice' ? 2 : (schedule === 'three' ? 3 : (schedule === 'four' ? 4 : null)));
 
     let commitItem;
     if(editingCommitId){
