@@ -583,9 +583,15 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, getSchedule
           else if(ratio >= 0.9) gain = 1;
           if(gain > 0 && !state.lifeGains[userId][dayKey]){
             state.lifeGains[userId][dayKey] = gain;
-            state.lives[userId] = Math.min(MAX_LIVES, state.lives[userId] + gain);
-            if(dayKey === yesterday || dayKey === today){
-              showToast('Loki is pleased with ' + userName(userId), `Kept up with scheduled habits — gained ${gain} ${gain === 1 ? 'life' : 'lives'}!`);
+            const before = state.lives[userId];
+            state.lives[userId] = Math.min(MAX_LIVES, before + gain);
+            // Lives cap at MAX_LIVES, so a "perfect week" gain can be
+            // partly or entirely absorbed by the cap if you're already
+            // near full -- report what actually changed, not the raw
+            // tier, and stay quiet if nothing did (already at max).
+            const actualGain = state.lives[userId] - before;
+            if(actualGain > 0 && (dayKey === yesterday || dayKey === today)){
+              showToast('Loki is pleased with ' + userName(userId), `Kept up with scheduled habits — gained ${actualGain} ${actualGain === 1 ? 'life' : 'lives'}!`);
             }
           }
         }
