@@ -7,6 +7,7 @@ import {
   isWeeklyTargetSchedule,
   isDeadlineSchedule,
   isTrackerSchedule,
+  isTrackerCompliantOnDay,
   getScheduleDescription,
   countCompletionsThisWeek,
   computeStreak,
@@ -129,14 +130,14 @@ test('getScheduleDescription: describes a deadline commitment by its due date', 
   assertEqual(getScheduleDescription({ schedule: 'deadline' }), 'One-off with a deadline');
 });
 
-test('isScheduledDay: a tracker (running clock) is never a scheduled day', () => {
-  // Regression guard against isScheduledDay's generic fallback (which
-  // defaults to true for any unrecognized schedule) silently treating a
-  // tracker as a daily habit -- it must never be "due", or it would start
-  // costing lives for something that's explicitly not about compliance.
+test('isScheduledDay: a tracker (running clock) is due every day, same as daily', () => {
+  // A tracker plugs into the same daily life-loss/XP/leaderboard machinery
+  // as a daily habit -- it must be "due" every day for that to work; what's
+  // inverted is what counts as compliant (see isTrackerCompliantOnDay), not
+  // whether it's due at all.
   const c = { schedule: 'tracker' };
   for (const day of ['2026-07-27', '2026-07-28', '2026-07-29', '2026-07-30', '2026-07-31', '2026-08-01', '2026-08-02']) {
-    assertEqual(isScheduledDay(c, day), false, `tracker on ${day}`);
+    assertEqual(isScheduledDay(c, day), true, `tracker on ${day}`);
   }
 });
 
@@ -146,14 +147,25 @@ test('isTrackerSchedule identifies tracker but not other schedule types', () => 
   assertEqual(isTrackerSchedule(null), false);
 });
 
-test('getScheduleDescription: describes a tracker as a running clock, not a schedule', () => {
-  assertEqual(getScheduleDescription({ schedule: 'tracker' }), 'Running clock — no fixed schedule');
+test('isTrackerCompliantOnDay: compliant means NOT logged that day -- inverted from a normal habit', () => {
+  const c = { schedule: 'tracker' };
+  const history = ['2026-07-30'];
+  assertEqual(isTrackerCompliantOnDay(c, history, '2026-07-30'), false, 'logged that day -- a miss');
+  assertEqual(isTrackerCompliantOnDay(c, history, '2026-07-31'), true, 'not logged -- compliant');
+  assertEqual(isTrackerCompliantOnDay(c, [], '2026-07-31'), true, 'never logged -- compliant');
 });
 
-test('computeStreak: a tracker always reads 0 and never loops looking for a scheduled day', () => {
-  // Same infinite-loop risk as the deadline schedule -- isScheduledDay()
-  // never returns true for 'tracker', so without this short-circuit,
-  // computeStreak() would walk backward from asOfIso forever.
+test('getScheduleDescription: describes a tracker\'s stakes, not just its lack of a schedule', () => {
+  assertEqual(getScheduleDescription({ schedule: 'tracker' }), 'Running clock — logging it costs a life and XP, like any other miss');
+});
+
+test('computeStreak: a tracker always reads 0, since its history holds bad days not good ones', () => {
+  // isScheduledDay() now returns true every day for a tracker (no infinite
+  // loop risk here anymore), but computeStreak() counts consecutive days
+  // PRESENT in history -- for a tracker that's consecutive days the avoided
+  // thing happened, which would render as a fake "achievement" streak for
+  // relapsing. Short-circuits to 0 instead; the running clock is the real
+  // indicator.
   const c = { schedule: 'tracker' };
   assertEqual(computeStreak(c, ['2026-07-31'], '2026-07-31'), 0);
   assertEqual(computeStreak(c, [], '2026-07-31'), 0);

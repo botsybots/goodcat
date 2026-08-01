@@ -22,13 +22,11 @@ export function isDeadlineSchedule(commit){
 }
 
 // A running clock since it was last logged (e.g. "3 days, 10 hours since
-// eating meat") -- there's no schedule to comply with and nothing is ever
-// "due", so it must never fall into isScheduledDay()'s generic fallback
-// (which defaults to true for any unrecognized schedule string) or it would
-// silently start costing lives for a habit that's explicitly not about
-// daily compliance. See computeStreak()'s early return for the same reason
-// deadline commitments short-circuit -- a schedule that's never "due" would
-// have computeStreak() walk backward forever looking for one.
+// eating meat"). It's "due" every day, same as a daily habit -- but what
+// counts as compliant is inverted (see isTrackerCompliantOnDay below):
+// staying clean is the win, logging it is the miss, so it plugs into the
+// same daily life-loss/XP/leaderboard machinery as a daily habit, just with
+// the boolean flipped.
 export function isTrackerSchedule(commit){
   return !!commit && commit.schedule === 'tracker';
 }
@@ -37,12 +35,20 @@ export function isScheduledDay(commit, isoDate){
   if(!commit || !isoDate) return false;
   if(isWeeklyTargetSchedule(commit)) return true;
   if(isDeadlineSchedule(commit)) return !!commit.deadlineDate && commit.deadlineDate === isoDate;
-  if(isTrackerSchedule(commit)) return false;
+  if(isTrackerSchedule(commit)) return true;
   const day = getDayKey(isoDate);
   if(commit.schedule === 'daily') return true;
   if(commit.schedule === 'weekdays') return ['mon','tue','wed','thu','fri'].includes(day);
   if(commit.schedule === 'custom' && Array.isArray(commit.scheduleDays) && commit.scheduleDays.length) return commit.scheduleDays.includes(day);
   return true;
+}
+
+// A tracker's history records when it was LOGGED (i.e. the avoided thing
+// happened) -- the opposite of a normal habit's history, which records when
+// it was done. So "compliant" for a given day means it was NOT logged that
+// day, not that it was.
+export function isTrackerCompliantOnDay(commit, historyDates, isoDate){
+  return !(historyDates || []).includes(isoDate);
 }
 
 export function getScheduleDescription(commit){
@@ -54,7 +60,7 @@ export function getScheduleDescription(commit){
   if(commit.schedule === 'four') return 'Four times a week (any 4 days)';
   if(commit.schedule === 'custom' && Array.isArray(commit.scheduleDays)) return `Custom: ${commit.scheduleDays.join(', ')}`;
   if(commit.schedule === 'deadline') return commit.deadlineDate ? `One-off — due ${commit.deadlineDate}` : 'One-off with a deadline';
-  if(commit.schedule === 'tracker') return 'Running clock — no fixed schedule';
+  if(commit.schedule === 'tracker') return 'Running clock — logging it costs a life and XP, like any other miss';
   return 'Daily';
 }
 
@@ -75,7 +81,13 @@ export function computeStreak(commit, historyDates, asOfIso){
   // in the future -- walking backward from asOfIso looking for a scheduled
   // day would never find one and loop forever. Streaks don't apply to a
   // single event anyway, so short-circuit to 0.
-  if(isDeadlineSchedule(commit) || isTrackerSchedule(commit)) return 0;
+  if(isDeadlineSchedule(commit)) return 0;
+  // A tracker's history holds LOGGED (bad) days, not done (good) days --
+  // this function counts consecutive days present in history, which for a
+  // tracker would mean "consecutive days you kept doing the avoided thing,"
+  // the opposite of an achievement. The running clock already shows the
+  // real progress; a "streak" number here would only be misleading.
+  if(isTrackerSchedule(commit)) return 0;
   const history = new Set(historyDates || []);
   const cursor = parseLocalDate(asOfIso);
   if(!cursor) return 0;

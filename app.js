@@ -1,5 +1,5 @@
 import { localDateKey, parseLocalDate, nextLocalDate, prevLocalDate, getDayKey, weekStartDate } from './date-utils.js';
-import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSchedule, getScheduleDescription, countCompletionsThisWeek, computeStreak, computeWeeklyStreak, LABEL_CATEGORIES } from './schedule-utils.js';
+import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSchedule, isTrackerCompliantOnDay, getScheduleDescription, countCompletionsThisWeek, computeStreak, computeWeeklyStreak, LABEL_CATEGORIES } from './schedule-utils.js';
 
 // Simple Accountability App (localStorage-backed)
 (function(){
@@ -490,9 +490,13 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
         // A one-off deadline commitment is only ever "due" on its single
         // deadline date, but may have been completed on an earlier day --
         // so "done" means completed at all, not completed on this exact date.
+        // A tracker's history holds LOGGED (bad) days, so compliance is the
+        // inverse of a normal habit's -- see isTrackerCompliantOnDay().
         const isDone = isDeadlineSchedule(commit)
           ? Array.isArray(commit.history) && commit.history.length > 0
-          : Array.isArray(commit.history) && commit.history.includes(isoDate);
+          : isTrackerSchedule(commit)
+            ? isTrackerCompliantOnDay(commit, commit.history, isoDate)
+            : Array.isArray(commit.history) && commit.history.includes(isoDate);
         if(isDone) done += 1;
       }
     }
@@ -870,6 +874,10 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
         if(res.ok){
           const j = await res.json();
           c.lastLoggedAt = j.lastLoggedAt || nowIso;
+          if(j.xp !== undefined && j.xp !== null){
+            state.usersXp = state.usersXp || {};
+            state.usersXp[currentUser] = j.xp;
+          }
         } else {
           c.lastLoggedAt = nowIso;
         }
@@ -881,7 +889,12 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
     if(!c.history.includes(today)) c.history.push(today);
     save(state);
     renderList();
-    showToast('Logged', `Reset the clock for "${c.text}".`);
+    // XP is docked immediately (the /log endpoint applies it synchronously,
+    // same as marking a normal habit done/undone). The life loss follows
+    // the usual daily evaluation instead, once today is fully in the past --
+    // same timing as any other missed habit -- so this is upfront that it
+    // hasn't landed yet rather than implying it already has.
+    showToast('Logged', `"${c.text}" — XP docked. Counts as a miss once today's tally runs, same as any other missed habit.`);
   }
 
   // Once a commitment is synced, the server is the source of truth for paw
@@ -1184,7 +1197,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
       const logBtn = document.createElement('button');
       logBtn.type = 'button';
       logBtn.className = 'detail-mark-btn';
-      logBtn.textContent = '🔁 Log now (resets the clock)';
+      logBtn.textContent = '🔁 Log now (resets the clock — costs a life)';
       logBtn.addEventListener('click', async ()=>{
         await logTracker(c);
         openCommitDetail(c);

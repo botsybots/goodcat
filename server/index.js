@@ -343,7 +343,11 @@ app.get('/api/commitments/:id/history', authMiddleware, async (req,res)=>{
 // same way, so it gets its own endpoint rather than overloading the
 // doneToday PUT semantics. Still writes to completion_log (incrementing
 // count on a repeat same-day log) so the existing History heatmap works for
-// trackers for free.
+// trackers for free. Whether it costs a LIFE is decided by the client's
+// usual daily evaluation once today is fully in the past (see
+// isTrackerCompliantOnDay in schedule-utils.js), same timing as any other
+// missed habit -- but XP is docked immediately here, since logging is a
+// discrete action, same as marking a normal habit done/undone.
 app.post('/api/commitments/:id/log', authMiddleware, async (req,res)=>{
   const id = req.params.id;
   try{
@@ -354,7 +358,17 @@ app.post('/api/commitments/:id/log', authMiddleware, async (req,res)=>{
     const nowIso = new Date().toISOString();
     await dbRun('INSERT INTO completion_log (commitment_id, user_id, date, count) VALUES (?,?,?,1) ON CONFLICT(commitment_id, date) DO UPDATE SET count = count + 1', [id, req.user.id, today]);
     await dbRun('UPDATE commitments SET lastLoggedAt = ? WHERE id = ?', [nowIso, id]);
-    res.json({ lastLoggedAt: nowIso });
+
+    // Same 10 XP debit as undoing a normal habit -- a joint tracker docks
+    // both people, since it's shared.
+    const isJoint = commit.scope === 'joint';
+    if(isJoint){
+      await dbRun("UPDATE users SET xp = MAX(0, COALESCE(xp,0) + ?) WHERE LOWER(name) IN ('anna','jordan')", [-10]);
+    } else {
+      await dbRun('UPDATE users SET xp = MAX(0, COALESCE(xp,0) + ?) WHERE id = ?', [-10, req.user.id]);
+    }
+    const xpRow = await dbGet('SELECT xp FROM users WHERE id = ?', [req.user.id]);
+    res.json({ lastLoggedAt: nowIso, xp: xpRow ? xpRow.xp : null });
   }catch(e){
     console.error('tracker log error', e);
     res.status(500).json({ error: 'db' });
@@ -601,6 +615,21 @@ app.get('/api/leaderboard/weekly', authMiddleware, async (req,res)=>{
           if(doneRow && doneRow.count > 0) completed += 1;
           continue;
         }
+        // A tracker is due every day, same as daily, but completion_log
+        // rows mark LOGGED (bad) days -- inverted from every other schedule
+        // type here, where a completion_log row means the day went well.
+        if(c.schedule === 'tracker'){
+          const dueDates = weekDatesSoFar;
+          if(!dueDates.length) continue;
+          scheduled += dueDates.length;
+          const rows = await dbAll(
+            `SELECT date FROM completion_log WHERE commitment_id = ? AND date IN (${dueDates.map(()=>'?').join(',')})`,
+            [c.id, ...dueDates]
+          );
+          const loggedDates = new Set(rows.map(r => r.date));
+          completed += dueDates.filter(d => !loggedDates.has(d)).length;
+          continue;
+        }
         const scheduleDays = c.scheduleDays ? JSON.parse(c.scheduleDays) : null;
         const dueDates = weekDatesSoFar.filter(d => isScheduledDay({ schedule: c.schedule, scheduleDays }, d));
         if(!dueDates.length) continue;
@@ -772,7 +801,12 @@ async function checkEndOfDayReminders(){
       if(user.lastEndOfDaySent === today) continue;
       await dbRun('UPDATE users SET lastEndOfDaySent = ? WHERE id = ?', [today, user.id]);
       const commits = await dbAll("SELECT schedule, scheduleDays, deadlineDate, doneToday FROM commitments WHERE (user_id = ? OR scope = 'joint') AND enabled = 1", [user.id]);
-      const incomplete = commits.some(c => isScheduledDay({ schedule: c.schedule, scheduleDays: c.scheduleDays ? JSON.parse(c.scheduleDays) : null, deadlineDate: c.deadlineDate }, today) && !c.doneToday);
+      // A tracker's doneToday column is never updated (the /log endpoint
+      // only touches lastLoggedAt and completion_log), and it's due every
+      // day now -- without this exclusion every tracker would look
+      // "incomplete" here every single night regardless of whether it was
+      // actually logged.
+      const incomplete = commits.some(c => c.schedule !== 'tracker' && isScheduledDay({ schedule: c.schedule, scheduleDays: c.scheduleDays ? JSON.parse(c.scheduleDays) : null, deadlineDate: c.deadlineDate }, today) && !c.doneToday);
       if(!incomplete) continue;
       const rows = await dbAll('SELECT subscription FROM push_subscriptions WHERE user_id = ?', [user.id]);
       if(!rows.length) continue;
