@@ -5,8 +5,8 @@ import jwt from 'jsonwebtoken';
 import cors from 'cors';
 import webpush from 'web-push';
 import { dbAll, dbGet, dbRun } from './db.js';
-import { isScheduledDay, computeStreak, LABEL_CATEGORIES } from '../schedule-utils.js';
-import { localDateKey } from '../date-utils.js';
+import { isScheduledDay, computeStreak, countTrackerCompliantDays, LABEL_CATEGORIES } from '../schedule-utils.js';
+import { localDateKey, nextLocalDate, prevLocalDate } from '../date-utils.js';
 
 const app = express();
 app.use(cors());
@@ -371,6 +371,52 @@ app.post('/api/commitments/:id/log', authMiddleware, async (req,res)=>{
     res.json({ lastLoggedAt: nowIso, xp: xpRow ? xpRow.xp : null });
   }catch(e){
     console.error('tracker log error', e);
+    res.status(500).json({ error: 'db' });
+  }
+});
+
+// Awards the daily XP trickle for a tracker's compliant (non-logged) days --
+// the flip side of the -10 debit in the /log endpoint above. Computed from
+// scratch against completion_log each time rather than incrementally, using
+// xpAwardedThroughDate as a watermark so a day is never paid out twice; only
+// days strictly after that watermark and up to yesterday are eligible, since
+// today isn't over yet (same boundary the client's own daily life-loss
+// evaluation uses). A relapse still costs its XP immediately via /log, but
+// it doesn't claw back days already paid out here -- past compliant days
+// stay earned.
+const TRACKER_DAILY_XP = 10;
+app.post('/api/commitments/:id/tracker-xp', authMiddleware, async (req,res)=>{
+  const id = req.params.id;
+  try{
+    const commit = await dbGet('SELECT id, user_id, scope, schedule, createdAt, xpAwardedThroughDate FROM commitments WHERE id = ?', [id]);
+    if(!commit) return res.status(404).json({ error: 'not found' });
+    if(commit.scope !== 'joint' && commit.user_id !== req.user.id) return res.status(403).json({ error: 'not yours' });
+    if(commit.schedule !== 'tracker') return res.status(400).json({ error: 'not a tracker' });
+
+    const today = localDateKey(new Date());
+    const yesterday = prevLocalDate(today);
+    const from = commit.xpAwardedThroughDate ? nextLocalDate(commit.xpAwardedThroughDate) : (commit.createdAt || today);
+
+    let delta = 0;
+    if(from && yesterday && from <= yesterday){
+      const historyRows = await dbAll('SELECT date FROM completion_log WHERE commitment_id = ?', [id]);
+      const historyDates = historyRows.map(r => r.date);
+      delta = countTrackerCompliantDays(historyDates, from, yesterday) * TRACKER_DAILY_XP;
+      if(delta > 0){
+        const isJoint = commit.scope === 'joint';
+        if(isJoint){
+          await dbRun("UPDATE users SET xp = MAX(0, COALESCE(xp,0) + ?) WHERE LOWER(name) IN ('anna','jordan')", [delta]);
+        } else {
+          await dbRun('UPDATE users SET xp = MAX(0, COALESCE(xp,0) + ?) WHERE id = ?', [delta, req.user.id]);
+        }
+      }
+      await dbRun('UPDATE commitments SET xpAwardedThroughDate = ? WHERE id = ?', [yesterday, id]);
+    }
+
+    const xpRow = await dbGet('SELECT xp FROM users WHERE id = ?', [req.user.id]);
+    res.json({ xp: xpRow ? xpRow.xp : null, xpAwarded: delta });
+  }catch(e){
+    console.error('tracker xp sync error', e);
     res.status(500).json({ error: 'db' });
   }
 });

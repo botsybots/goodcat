@@ -1,4 +1,4 @@
-import { getDayKey, localDateKey, parseLocalDate, weekStartDate } from './date-utils.js';
+import { getDayKey, localDateKey, parseLocalDate, weekStartDate, nextLocalDate } from './date-utils.js';
 
 const WEEKLY_TARGET_SCHEDULES = ['twice', 'three', 'four'];
 
@@ -60,8 +60,35 @@ export function getScheduleDescription(commit){
   if(commit.schedule === 'four') return 'Four times a week (any 4 days)';
   if(commit.schedule === 'custom' && Array.isArray(commit.scheduleDays)) return `Custom: ${commit.scheduleDays.join(', ')}`;
   if(commit.schedule === 'deadline') return commit.deadlineDate ? `One-off — due ${commit.deadlineDate}` : 'One-off with a deadline';
-  if(commit.schedule === 'tracker') return 'Running clock — logging it costs a life and XP, like any other miss';
+  if(commit.schedule === 'tracker') return 'Running clock — earns XP daily, but logging it costs a life and XP, like any other miss';
   return 'Daily';
+}
+
+// Counts days a tracker stayed compliant (not logged) within [fromIso, toIso]
+// inclusive -- the basis for its daily XP trickle. Shared between client and
+// server so the running total the server actually pays out and whatever the
+// client might project locally never disagree.
+export function countTrackerCompliantDays(historyDates, fromIso, toIso){
+  if(!fromIso || !toIso || fromIso > toIso) return 0;
+  const logged = new Set(historyDates || []);
+  let count = 0;
+  let cursor = fromIso;
+  while(cursor <= toIso){
+    if(!logged.has(cursor)) count += 1;
+    cursor = nextLocalDate(cursor);
+  }
+  return count;
+}
+
+// Tracker milestones fire at a constant weekly cadence and deliberately
+// never taper off to monthly/yearly as the streak grows -- the
+// reinforcement stays just as frequent later on as it was in week one.
+export function trackerMilestoneWeeks(elapsedDays){
+  return Math.floor(Math.max(0, elapsedDays || 0) / 7);
+}
+
+export function trackerMilestoneLabel(weeks){
+  return `${weeks} Week${weeks === 1 ? '' : 's'}`;
 }
 
 export function countCompletionsThisWeek(commit, refDate){

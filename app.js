@@ -1,5 +1,5 @@
 import { localDateKey, parseLocalDate, nextLocalDate, prevLocalDate, getDayKey, weekStartDate } from './date-utils.js';
-import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSchedule, isTrackerCompliantOnDay, getScheduleDescription, countCompletionsThisWeek, computeStreak, computeWeeklyStreak, LABEL_CATEGORIES } from './schedule-utils.js';
+import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSchedule, isTrackerCompliantOnDay, getScheduleDescription, countCompletionsThisWeek, computeStreak, computeWeeklyStreak, trackerMilestoneWeeks, trackerMilestoneLabel, LABEL_CATEGORIES } from './schedule-utils.js';
 
 // Simple Accountability App (localStorage-backed)
 (function(){
@@ -1068,8 +1068,63 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
     document.querySelectorAll('.tracker-status').forEach(el => {
       el.textContent = trackerStatusText(el.dataset.lastLoggedAt || null, el.dataset.full === '1');
     });
+    checkAllTrackerMilestones();
   }
   setInterval(tickTrackerClocks, 30000);
+
+  function trackerElapsedDays(lastLoggedAtIso){
+    if(!lastLoggedAtIso) return 0;
+    return Math.floor((Date.now() - new Date(lastLoggedAtIso).getTime()) / 86400000);
+  }
+
+  // The last weekly milestone a tracker has actually reached, for the "Last
+  // milestone" card in detail view -- null until a full week has passed.
+  function lastTrackerMilestone(c){
+    const weeks = trackerMilestoneWeeks(trackerElapsedDays(c.lastLoggedAt));
+    if(weeks < 1) return null;
+    return { weeks, label: trackerMilestoneLabel(weeks), days: weeks * 7 };
+  }
+
+  function buildTrackerMilestoneCard(c){
+    const milestone = lastTrackerMilestone(c);
+    const el = document.createElement('div');
+    el.className = 'tracker-milestone';
+    el.innerHTML = milestone
+      ? `<div class="tracker-milestone-label">Last milestone</div><div class="tracker-milestone-value">🏅 ${escapeHtml(milestone.label)} · ${milestone.days} days</div>`
+      : `<div class="tracker-milestone-label">Last milestone</div><div class="tracker-milestone-value muted">Keep it up for a week to hit your first one</div>`;
+    return el;
+  }
+
+  // Celebrates a tracker crossing a new weekly milestone. Milestone
+  // acknowledgement (c.milestonesCelebrated) is local-only, same as lives --
+  // mergeRemoteCommitment() never touches unrecognized fields, so this
+  // survives a server sync untouched, and each device pops its own fireworks
+  // rather than depending on a round trip. If several weeks were crossed at
+  // once (app not opened for a while), every one of them is marked
+  // acknowledged but only the highest is actually celebrated, so reopening
+  // the app after a month doesn't fire four overlays in a row.
+  function checkTrackerMilestone(c){
+    if(!isTrackerSchedule(c) || !c.lastLoggedAt) return;
+    const weeks = trackerMilestoneWeeks(trackerElapsedDays(c.lastLoggedAt));
+    if(weeks < 1) return;
+    c.milestonesCelebrated = c.milestonesCelebrated || [];
+    if(c.milestonesCelebrated.includes(weeks)) return;
+    const newlyCrossed = [];
+    for(let w = 1; w <= weeks; w += 1){
+      if(!c.milestonesCelebrated.includes(w)){
+        c.milestonesCelebrated.push(w);
+        newlyCrossed.push(w);
+      }
+    }
+    save(state);
+    if(newlyCrossed.length){
+      showCelebration(`🎉 "${c.text}" hit a milestone: ${trackerMilestoneLabel(weeks)}!`);
+    }
+  }
+
+  function checkAllTrackerMilestones(){
+    state.commitments.filter(isTrackerSchedule).forEach(checkTrackerMilestone);
+  }
 
   function renderCommitmentsForUser(userId, targetList){
     targetList.innerHTML = '';
@@ -1218,7 +1273,10 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
     }
 
     if(isDeadline) detailBody.appendChild(buildDeadlineStatus(c));
-    else if(isTracker) detailBody.appendChild(buildTrackerStatus(c, { full: true }));
+    else if(isTracker){
+      detailBody.appendChild(buildTrackerStatus(c, { full: true }));
+      detailBody.appendChild(buildTrackerMilestoneCard(c));
+    }
     else detailBody.appendChild(buildWeekStrip(c));
 
     if(c.target){
@@ -1760,6 +1818,27 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
     });
   }
 
+  // Pays out each tracker's daily XP trickle since it was last credited --
+  // piggybacks on the regular sync cycle rather than its own timer, since
+  // there's no way to earn it faster than that anyway (it's calendar days
+  // elapsed, not actions taken). Must run before fetchUsersXp() so its
+  // payout is already reflected in the number that call brings back.
+  async function syncTrackerXp(){
+    const trackers = state.commitments.filter(c => isTrackerSchedule(c) && c.remoteId && (c.for === currentUser || c.for === 'both'));
+    for(const c of trackers){
+      try{
+        const res = await fetch(apiBase() + '/api/commitments/' + c.remoteId + '/tracker-xp', { method: 'POST', headers: { authorization: 'Bearer '+authToken } });
+        if(res.ok){
+          const j = await res.json();
+          if(j.xp !== undefined && j.xp !== null){
+            state.usersXp = state.usersXp || {};
+            state.usersXp[currentUser] = j.xp;
+          }
+        }
+      }catch(e){ console.error('tracker xp sync failed', e); }
+    }
+  }
+
   async function runSync(){
     if(!authToken) return;
     try{
@@ -1772,6 +1851,8 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
       // longer exist on the server (deleted by their owner elsewhere).
       const remoteIds = new Set(list.map(r => r.id));
       state.commitments = state.commitments.filter(c => !c.remoteId || remoteIds.has(c.remoteId));
+      checkAllTrackerMilestones();
+      await syncTrackerXp();
       save(state);
       renderList();
       fetchUsersXp();

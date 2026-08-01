@@ -76,7 +76,8 @@ async function migrate() {
     reminderTime: 'TEXT', lastReminderSent: 'TEXT', weeklyTarget: 'INTEGER',
     streak: 'INTEGER DEFAULT 0', lastDone: 'TEXT', label: 'TEXT', target: 'INTEGER',
     achieved: 'INTEGER DEFAULT 0', achievedAt: 'TEXT', createdAt: 'TEXT',
-    scope: "TEXT DEFAULT 'personal'", deadlineDate: 'TEXT', lastLoggedAt: 'TEXT'
+    scope: "TEXT DEFAULT 'personal'", deadlineDate: 'TEXT', lastLoggedAt: 'TEXT',
+    xpAwardedThroughDate: 'TEXT'
   };
   for (const [col, def] of Object.entries(wantedCommitmentCols)) {
     if (!commitmentCols.includes(col)) await dbRun(`ALTER TABLE commitments ADD COLUMN ${col} ${def}`);

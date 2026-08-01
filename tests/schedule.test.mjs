@@ -11,7 +11,10 @@ import {
   getScheduleDescription,
   countCompletionsThisWeek,
   computeStreak,
-  computeWeeklyStreak
+  computeWeeklyStreak,
+  countTrackerCompliantDays,
+  trackerMilestoneWeeks,
+  trackerMilestoneLabel
 } from '../schedule-utils.js';
 import {
   localDateKey,
@@ -156,7 +159,38 @@ test('isTrackerCompliantOnDay: compliant means NOT logged that day -- inverted f
 });
 
 test('getScheduleDescription: describes a tracker\'s stakes, not just its lack of a schedule', () => {
-  assertEqual(getScheduleDescription({ schedule: 'tracker' }), 'Running clock — logging it costs a life and XP, like any other miss');
+  assertEqual(getScheduleDescription({ schedule: 'tracker' }), 'Running clock — earns XP daily, but logging it costs a life and XP, like any other miss');
+});
+
+// --- schedule-utils: countTrackerCompliantDays ---
+
+test('countTrackerCompliantDays: counts every day in range not present in history', () => {
+  assertEqual(countTrackerCompliantDays([], '2026-07-28', '2026-07-31'), 4);
+});
+
+test('countTrackerCompliantDays: logged days do not count', () => {
+  const history = ['2026-07-29']; // one relapse day inside the range
+  assertEqual(countTrackerCompliantDays(history, '2026-07-28', '2026-07-31'), 3);
+});
+
+test('countTrackerCompliantDays: an inverted or missing range counts as zero', () => {
+  assertEqual(countTrackerCompliantDays([], '2026-07-31', '2026-07-28'), 0);
+  assertEqual(countTrackerCompliantDays([], null, '2026-07-31'), 0);
+});
+
+// --- schedule-utils: tracker milestones ---
+
+test('trackerMilestoneWeeks: floors to the number of full weeks elapsed', () => {
+  assertEqual(trackerMilestoneWeeks(0), 0);
+  assertEqual(trackerMilestoneWeeks(6), 0);
+  assertEqual(trackerMilestoneWeeks(7), 1);
+  assertEqual(trackerMilestoneWeeks(21), 3);
+  assertEqual(trackerMilestoneWeeks(365), 52);
+});
+
+test('trackerMilestoneLabel: pluralizes weeks correctly', () => {
+  assertEqual(trackerMilestoneLabel(1), '1 Week');
+  assertEqual(trackerMilestoneLabel(3), '3 Weeks');
 });
 
 test('computeStreak: a tracker always reads 0, since its history holds bad days not good ones', () => {
