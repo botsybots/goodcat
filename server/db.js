@@ -178,6 +178,21 @@ async function migrate() {
     FOREIGN KEY(created_by) REFERENCES users(id)
   )`);
 
+  // A second, separate shared list, same shape as todos -- kept as its own
+  // table rather than folding into todos with a "type" column, since
+  // grocery items and general tasks genuinely don't belong mixed together
+  // in one list, and this is exactly two lists, not an open-ended set that
+  // would justify a more generic "lists" abstraction.
+  await dbRun(`CREATE TABLE IF NOT EXISTS shopping_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    text TEXT,
+    done INTEGER DEFAULT 0,
+    created_by INTEGER,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    done_at TEXT,
+    FOREIGN KEY(created_by) REFERENCES users(id)
+  )`);
+
   // One-time cleanup: registration used to be open to anyone, so a handful
   // of stranger/bot accounts registered before that was locked down (e.g.
   // "__deploytest__"). This app is exactly Anna and Jordan -- remove any
@@ -199,6 +214,7 @@ async function migrate() {
     await dbRun('DELETE FROM commitment_suggestions WHERE from_user_id = ? OR to_user_id = ?', [u.id, u.id]);
     await dbRun('DELETE FROM pause_requests WHERE requested_by = ?', [u.id]);
     await dbRun('DELETE FROM todos WHERE created_by = ?', [u.id]);
+    await dbRun('DELETE FROM shopping_items WHERE created_by = ?', [u.id]);
     await dbRun('DELETE FROM users WHERE id = ?', [u.id]);
   }
 }

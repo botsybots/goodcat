@@ -42,6 +42,7 @@
       <nav class="tab-bar" role="tablist">
         <button type="button" class="tab-button active" id="tabCommitments" role="tab" aria-selected="true">🐾 Commitments</button>
         <button type="button" class="tab-button" id="tabTodos" role="tab" aria-selected="false">✅ To-dos</button>
+        <button type="button" class="tab-button" id="tabShopping" role="tab" aria-selected="false">🛒 Shopping</button>
       </nav>
 
       <div id="commitmentsView">
@@ -127,6 +128,24 @@
           </form>
           <p id="todosLoggedOutHint" class="small muted hidden">Log in to use the shared to-do list.</p>
           <ul id="todoList" class="todo-list"></ul>
+        </section>
+      </div>
+
+      <div id="shoppingView" class="hidden">
+        <section class="user-panel todos-panel">
+          <div class="panel-header">
+            <div>
+              <h2>🛒 Shopping list</h2>
+              <p class="small muted">One list, either of you can add, check off, or remove.</p>
+            </div>
+            <button type="button" id="btnClearCheckedShopping" class="clear-checked-btn hidden">Clear checked</button>
+          </div>
+          <form id="shoppingAddForm" class="todo-add-row">
+            <input id="shoppingInput" placeholder="Add something to buy..." />
+            <button type="submit">Add</button>
+          </form>
+          <p id="shoppingLoggedOutHint" class="small muted hidden">Log in to use the shared shopping list.</p>
+          <ul id="shoppingList" class="todo-list"></ul>
         </section>
       </div>
 

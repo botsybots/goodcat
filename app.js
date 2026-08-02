@@ -146,8 +146,10 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
   const celebrationText = document.getElementById('celebrationText');
   const tabCommitments = document.getElementById('tabCommitments');
   const tabTodos = document.getElementById('tabTodos');
+  const tabShopping = document.getElementById('tabShopping');
   const commitmentsView = document.getElementById('commitmentsView');
   const todosView = document.getElementById('todosView');
+  const shoppingView = document.getElementById('shoppingView');
   const wellbeingSection = document.getElementById('wellbeingSection');
   const wellbeingIcon = document.getElementById('wellbeingIcon');
   const wellbeingQuestion = document.getElementById('wellbeingQuestion');
@@ -155,6 +157,11 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
   const todoInput = document.getElementById('todoInput');
   const todoList = document.getElementById('todoList');
   const todosLoggedOutHint = document.getElementById('todosLoggedOutHint');
+  const shoppingAddForm = document.getElementById('shoppingAddForm');
+  const shoppingInput = document.getElementById('shoppingInput');
+  const shoppingList = document.getElementById('shoppingList');
+  const shoppingLoggedOutHint = document.getElementById('shoppingLoggedOutHint');
+  const btnClearCheckedShopping = document.getElementById('btnClearCheckedShopping');
   const START_LIVES = 9;
   const MAX_LIVES = 9;
   const RESET_LIVES_AFTER_COUNCIL = 3;
@@ -273,17 +280,19 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
   // to-do list -- not persisted across reloads, since it's a quick glance
   // switch rather than a durable preference.
   function switchTab(tab){
-    const onTodos = tab === 'todos';
-    tabCommitments.classList.toggle('active', !onTodos);
-    tabTodos.classList.toggle('active', onTodos);
-    tabCommitments.setAttribute('aria-selected', String(!onTodos));
-    tabTodos.setAttribute('aria-selected', String(onTodos));
-    commitmentsView.classList.toggle('hidden', onTodos);
-    todosView.classList.toggle('hidden', !onTodos);
-    if(onTodos) fetchTodos();
+    const tabs = { commitments: { btn: tabCommitments, view: commitmentsView }, todos: { btn: tabTodos, view: todosView }, shopping: { btn: tabShopping, view: shoppingView } };
+    Object.entries(tabs).forEach(([name, { btn, view }]) => {
+      const active = name === tab;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-selected', String(active));
+      view.classList.toggle('hidden', !active);
+    });
+    if(tab === 'todos') fetchTodos();
+    if(tab === 'shopping') fetchShoppingItems();
   }
   tabCommitments.addEventListener('click', ()=> switchTab('commitments'));
   tabTodos.addEventListener('click', ()=> switchTab('todos'));
+  tabShopping.addEventListener('click', ()=> switchTab('shopping'));
 
   function urlBase64ToUint8Array(base64String) {
     const padding = '='.repeat((4 - base64String.length % 4) % 4);
@@ -1673,6 +1682,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
       wellbeingCategory = null;
       renderWellbeingPrompt();
       fetchTodos();
+      fetchShoppingItems();
     }
   }
 
@@ -2059,6 +2069,129 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
     });
   }
 
+  // --- Shared shopping list -- same shape and rules as the to-do list
+  // above; kept as its own separate list rather than mixed into todos,
+  // since groceries and general tasks don't belong together. The one thing
+  // genuinely specific to a shopping list: a bulk "clear checked" for once
+  // the shop's actually done. ---
+  async function fetchShoppingItems(){
+    if(!authToken){
+      state.shoppingItems = [];
+      renderShoppingItems();
+      return;
+    }
+    try{
+      const res = await fetch(apiBase() + '/api/shopping-items', { headers: { authorization: 'Bearer '+authToken } });
+      if(!res.ok) return;
+      state.shoppingItems = await res.json();
+      renderShoppingItems();
+    }catch(e){ /* non-critical */ }
+  }
+
+  function renderShoppingItems(){
+    if(!shoppingList) return;
+    const loggedOut = !authToken;
+    if(shoppingLoggedOutHint) shoppingLoggedOutHint.classList.toggle('hidden', !loggedOut);
+    if(shoppingAddForm) shoppingAddForm.classList.toggle('hidden', loggedOut);
+    const items = state.shoppingItems || [];
+    shoppingList.innerHTML = '';
+    if(btnClearCheckedShopping) btnClearCheckedShopping.classList.toggle('hidden', loggedOut || !items.some(i => i.done));
+    if(loggedOut) return;
+    if(items.length === 0){
+      shoppingList.innerHTML = '<li class="empty-state small muted">Nothing on the list yet.</li>';
+      return;
+    }
+    items.forEach(i => {
+      const li = document.createElement('li');
+      li.className = 'todo-item' + (i.done ? ' is-done' : '');
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.className = 'todo-checkbox';
+      checkbox.checked = !!i.done;
+      checkbox.setAttribute('aria-label', `Mark "${i.text}" ${i.done ? 'not bought' : 'bought'}`);
+      checkbox.addEventListener('change', ()=> toggleShoppingItem(i, checkbox.checked));
+      const text = document.createElement('span');
+      text.className = 'todo-text';
+      text.textContent = i.text;
+      const meta = document.createElement('span');
+      meta.className = 'todo-meta small muted';
+      meta.textContent = i.createdByName ? `added by ${i.createdByName}` : '';
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'todo-delete-btn';
+      delBtn.textContent = '🗑';
+      delBtn.setAttribute('aria-label', `Remove "${i.text}"`);
+      delBtn.addEventListener('click', ()=> deleteShoppingItem(i));
+      li.appendChild(checkbox);
+      li.appendChild(text);
+      li.appendChild(meta);
+      li.appendChild(delBtn);
+      shoppingList.appendChild(li);
+    });
+  }
+
+  async function addShoppingItem(text){
+    if(!authToken) return false;
+    try{
+      const res = await fetch(apiBase() + '/api/shopping-items', { method: 'POST', headers: { 'content-type':'application/json', authorization: 'Bearer '+authToken }, body: JSON.stringify({ text }) });
+      if(!res.ok){
+        const j = await res.json().catch(()=>null);
+        showToast('Not saved', (j && j.error) || "That item didn't save -- check you're still logged in and try again.");
+        return false;
+      }
+      await fetchShoppingItems();
+      return true;
+    }catch(e){
+      showToast('Offline?', "Could not reach the server -- that item wasn't saved.");
+      return false;
+    }
+  }
+
+  async function toggleShoppingItem(i, done){
+    if(!authToken) return;
+    i.done = done; // optimistic
+    renderShoppingItems();
+    try{
+      const res = await fetch(apiBase() + '/api/shopping-items/' + i.id, { method: 'PUT', headers: { 'content-type':'application/json', authorization: 'Bearer '+authToken }, body: JSON.stringify({ done }) });
+      if(!res.ok) showToast('Not saved', "That change didn't save -- try again in a moment.");
+      await fetchShoppingItems();
+    }catch(e){ showToast('Offline?', 'Could not reach the server.'); }
+  }
+
+  async function deleteShoppingItem(i){
+    if(!authToken) return;
+    try{
+      const res = await fetch(apiBase() + '/api/shopping-items/' + i.id, { method: 'DELETE', headers: { authorization: 'Bearer '+authToken } });
+      if(!res.ok) showToast('Not removed', "That didn't delete -- try again in a moment.");
+      await fetchShoppingItems();
+    }catch(e){ showToast('Offline?', 'Could not reach the server.'); }
+  }
+
+  if(shoppingAddForm){
+    shoppingAddForm.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const text = shoppingInput.value.trim();
+      if(!text) return;
+      const submitBtn = shoppingAddForm.querySelector('button[type="submit"]');
+      if(submitBtn) submitBtn.disabled = true;
+      const saved = await addShoppingItem(text);
+      if(submitBtn) submitBtn.disabled = false;
+      if(saved) shoppingInput.value = '';
+    });
+  }
+
+  if(btnClearCheckedShopping){
+    btnClearCheckedShopping.addEventListener('click', async ()=>{
+      if(!authToken) return;
+      try{
+        const res = await fetch(apiBase() + '/api/shopping-items/clear-checked', { method: 'POST', headers: { authorization: 'Bearer '+authToken } });
+        if(!res.ok){ showToast('Not cleared', "Couldn't clear checked items -- try again in a moment."); return; }
+        await fetchShoppingItems();
+        showToast('Cleared', 'Checked items removed from the list.');
+      }catch(e){ showToast('Offline?', 'Could not reach the server.'); }
+    });
+  }
+
   // Pays out each tracker's daily XP trickle since it was last credited --
   // piggybacks on the regular sync cycle rather than its own timer, since
   // there's no way to earn it faster than that anyway (it's calendar days
@@ -2108,6 +2241,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
       fetchPauseRequests();
       fetchWellbeingPrompt();
       fetchTodos();
+      fetchShoppingItems();
     }catch(e){ console.error('sync failed', e); }
   }
 

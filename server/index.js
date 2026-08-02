@@ -956,6 +956,71 @@ app.delete('/api/todos/:id', authMiddleware, async (req,res)=>{
   }
 });
 
+// --- Shared shopping list -- same shape and rules as the to-do list above
+// (anyone can add, check off, or delete any item), kept as its own list
+// rather than mixed into todos since groceries and general tasks don't
+// belong in the same list. The one thing genuinely specific to a shopping
+// list: a bulk "clear checked" for once the shop's actually done, rather
+// than deleting items off one at a time. ---
+app.get('/api/shopping-items', authMiddleware, async (req,res)=>{
+  try{
+    const rows = await dbAll(`
+      SELECT s.id, s.text, s.done, s.created_at as createdAt, s.done_at as doneAt, u.name as createdByName
+      FROM shopping_items s JOIN users u ON u.id = s.created_by
+      ORDER BY s.done ASC, s.created_at ASC
+    `);
+    res.json(rows.map(r => ({ id: r.id, text: r.text, done: !!r.done, createdAt: r.createdAt, doneAt: r.doneAt, createdByName: r.createdByName })));
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
+});
+
+app.post('/api/shopping-items', authMiddleware, async (req,res)=>{
+  const text = ((req.body && req.body.text) || '').trim();
+  if(!text) return res.status(400).json({ error: 'text required' });
+  try{
+    const result = await dbRun('INSERT INTO shopping_items (text, done, created_by, created_at) VALUES (?,0,?,?)', [text, req.user.id, new Date().toISOString()]);
+    res.json({ id: result.lastID, text, done: false, createdAt: new Date().toISOString(), doneAt: null, createdByName: req.user.name });
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
+});
+
+app.put('/api/shopping-items/:id', authMiddleware, async (req,res)=>{
+  const id = req.params.id;
+  const { done } = req.body;
+  try{
+    const existing = await dbGet('SELECT id FROM shopping_items WHERE id = ?', [id]);
+    if(!existing) return res.status(404).json({ error: 'not found' });
+    const doneAt = done ? new Date().toISOString() : null;
+    await dbRun('UPDATE shopping_items SET done = ?, done_at = ? WHERE id = ?', [done?1:0, doneAt, id]);
+    res.json({ success: true, doneAt });
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
+});
+
+app.delete('/api/shopping-items/:id', authMiddleware, async (req,res)=>{
+  const id = req.params.id;
+  try{
+    await dbRun('DELETE FROM shopping_items WHERE id = ?', [id]);
+    res.json({ success: true });
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
+});
+
+// Bulk-clears every checked item at once -- for after the shop is actually
+// done, rather than deleting each one individually.
+app.post('/api/shopping-items/clear-checked', authMiddleware, async (req,res)=>{
+  try{
+    await dbRun('DELETE FROM shopping_items WHERE done = 1');
+    res.json({ success: true });
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
+});
+
 function shouldSendReminder(commit, now){
   if(!commit.reminderEnabled || !commit.reminderTime || !commit.enabled) return false;
   const todayKey = localDateKey(now);

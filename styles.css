@@ -1404,6 +1404,32 @@ footer {
   display: none;
 }
 
+#shoppingLoggedOutHint.hidden {
+  display: none;
+}
+
+.clear-checked-btn {
+  flex-shrink: 0;
+  min-height: 0;
+  padding: 8px 12px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  border: 1px solid var(--border);
+  background: var(--paper);
+  color: var(--muted);
+  border-radius: var(--radius-chip);
+  cursor: pointer;
+}
+
+.clear-checked-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent-dark);
+}
+
+.clear-checked-btn.hidden {
+  display: none;
+}
+
 #wizTrackerHint.hidden {
   display: none;
 }
