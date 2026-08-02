@@ -2005,13 +2005,25 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
     });
   }
 
+  // Returns whether it actually saved -- the caller (the form submit
+  // handler below) needs that to decide whether it's safe to clear the
+  // input, rather than clearing it unconditionally and having a failed add
+  // look identical to a successful one.
   async function addTodo(text){
-    if(!authToken) return;
+    if(!authToken) return false;
     try{
       const res = await fetch(apiBase() + '/api/todos', { method: 'POST', headers: { 'content-type':'application/json', authorization: 'Bearer '+authToken }, body: JSON.stringify({ text }) });
-      if(!res.ok) return;
+      if(!res.ok){
+        const j = await res.json().catch(()=>null);
+        showToast('Not saved', (j && j.error) || "That to-do didn't save -- check you're still logged in and try again.");
+        return false;
+      }
       await fetchTodos();
-    }catch(e){ showToast('Offline?', 'Could not reach the server.'); }
+      return true;
+    }catch(e){
+      showToast('Offline?', "Could not reach the server -- that to-do wasn't saved.");
+      return false;
+    }
   }
 
   async function toggleTodo(t, done){
@@ -2019,7 +2031,8 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
     t.done = done; // optimistic
     renderTodos();
     try{
-      await fetch(apiBase() + '/api/todos/' + t.id, { method: 'PUT', headers: { 'content-type':'application/json', authorization: 'Bearer '+authToken }, body: JSON.stringify({ done }) });
+      const res = await fetch(apiBase() + '/api/todos/' + t.id, { method: 'PUT', headers: { 'content-type':'application/json', authorization: 'Bearer '+authToken }, body: JSON.stringify({ done }) });
+      if(!res.ok) showToast('Not saved', "That change didn't save -- try again in a moment.");
       await fetchTodos();
     }catch(e){ showToast('Offline?', 'Could not reach the server.'); }
   }
@@ -2027,18 +2040,22 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
   async function deleteTodo(t){
     if(!authToken) return;
     try{
-      await fetch(apiBase() + '/api/todos/' + t.id, { method: 'DELETE', headers: { authorization: 'Bearer '+authToken } });
+      const res = await fetch(apiBase() + '/api/todos/' + t.id, { method: 'DELETE', headers: { authorization: 'Bearer '+authToken } });
+      if(!res.ok) showToast('Not removed', "That didn't delete -- try again in a moment.");
       await fetchTodos();
     }catch(e){ showToast('Offline?', 'Could not reach the server.'); }
   }
 
   if(todoAddForm){
-    todoAddForm.addEventListener('submit', e => {
+    todoAddForm.addEventListener('submit', async (e)=>{
       e.preventDefault();
       const text = todoInput.value.trim();
       if(!text) return;
-      addTodo(text);
-      todoInput.value = '';
+      const submitBtn = todoAddForm.querySelector('button[type="submit"]');
+      if(submitBtn) submitBtn.disabled = true;
+      const saved = await addTodo(text);
+      if(submitBtn) submitBtn.disabled = false;
+      if(saved) todoInput.value = '';
     });
   }
 
