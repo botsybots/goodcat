@@ -149,6 +149,22 @@ async function migrate() {
     FOREIGN KEY(to_user_id) REFERENCES users(id)
   )`);
 
+  // Pausing a commitment closes off its life-loss/leaderboard/reminder
+  // stakes -- for a joint commitment especially, that's not something one
+  // person should be able to do unilaterally to something you're both on
+  // the hook for. So pausing goes through a request the OTHER person has to
+  // approve (resuming stays instant -- only opting OUT needs the gate).
+  // The commitment stays fully enforced while a request sits pending.
+  await dbRun(`CREATE TABLE IF NOT EXISTS pause_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    commitment_id INTEGER,
+    requested_by INTEGER,
+    status TEXT DEFAULT 'pending',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(commitment_id) REFERENCES commitments(id),
+    FOREIGN KEY(requested_by) REFERENCES users(id)
+  )`);
+
   // Shared checklist -- unlike commitments, a to-do belongs to both people
   // at once rather than one owner; anyone can add, check off, or delete any
   // item. No streak/schedule/history -- it's a one-time list, not a habit.
@@ -174,12 +190,14 @@ async function migrate() {
       await dbRun('DELETE FROM completion_log WHERE commitment_id = ?', [c.id]);
       await dbRun('DELETE FROM paw_log WHERE commitment_id = ?', [c.id]);
       await dbRun('DELETE FROM comments WHERE commitment_id = ?', [c.id]);
+      await dbRun('DELETE FROM pause_requests WHERE commitment_id = ?', [c.id]);
     }
     await dbRun('DELETE FROM commitments WHERE user_id = ?', [u.id]);
     await dbRun('DELETE FROM paw_log WHERE giver_user_id = ?', [u.id]);
     await dbRun('DELETE FROM comments WHERE user_id = ?', [u.id]);
     await dbRun('DELETE FROM push_subscriptions WHERE user_id = ?', [u.id]);
     await dbRun('DELETE FROM commitment_suggestions WHERE from_user_id = ? OR to_user_id = ?', [u.id, u.id]);
+    await dbRun('DELETE FROM pause_requests WHERE requested_by = ?', [u.id]);
     await dbRun('DELETE FROM todos WHERE created_by = ?', [u.id]);
     await dbRun('DELETE FROM users WHERE id = ?', [u.id]);
   }

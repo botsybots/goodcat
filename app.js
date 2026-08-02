@@ -125,6 +125,8 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
   const suggestionsSection = document.getElementById('suggestionsSection');
   const suggestionsList = document.getElementById('suggestionsList');
   const btnSuggest = document.getElementById('btnSuggest');
+  const pauseRequestsSection = document.getElementById('pauseRequestsSection');
+  const pauseRequestsList = document.getElementById('pauseRequestsList');
   const suggestModal = document.getElementById('suggestModal');
   const suggestClose = document.getElementById('suggestClose');
   const suggestForm = document.getElementById('suggestForm');
@@ -1234,6 +1236,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
     return [
       c.for === 'both' ? '<span class="joint-badge">🤝 Together</span>' : '',
       !c.enabled ? '<span class="paused-badge">Paused</span>' : '',
+      c.enabled && c.pauseRequestPending ? `<span class="paused-badge">${c.pauseRequestedByMe ? 'Pause requested' : 'Pause needs your OK'}</span>` : '',
       notStartedYet ? `<span class="paused-badge">Starts ${escapeHtml(c.createdAt)}</span>` : '',
       c.label ? `<span class="label-badge">${LABEL_ICONS[c.label] || ''} ${escapeHtml(c.label)}</span>` : '',
       c.achieved ? '<span class="achieved-badge">Achieved</span>' : ''
@@ -1426,16 +1429,47 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
       editBtn.addEventListener('click', ()=>{ detailModal.classList.add('hidden'); openEditCommit(c); });
       actions.appendChild(editBtn);
 
-      const pauseBtn = document.createElement('button'); pauseBtn.type='button'; pauseBtn.className='detail-action-btn';
-      pauseBtn.textContent = c.enabled ? '⏸ Pause' : '▶️ Resume';
-      pauseBtn.addEventListener('click', ()=>{
-        c.enabled = !c.enabled;
-        save(state);
-        pushCommitmentToServer(c);
-        renderList();
-        openCommitDetail(c);
-      });
-      actions.appendChild(pauseBtn);
+      // Resuming stays a single instant button -- only PAUSING (opting out
+      // of the life-loss/leaderboard/reminder stakes) goes through the
+      // request/approve flow, so the friction only applies to the direction
+      // that matters.
+      if(!c.enabled){
+        const resumeBtn = document.createElement('button'); resumeBtn.type='button'; resumeBtn.className='detail-action-btn'; resumeBtn.textContent='▶️ Resume';
+        resumeBtn.addEventListener('click', ()=>{
+          c.enabled = true;
+          save(state);
+          pushCommitmentToServer(c);
+          renderList();
+          openCommitDetail(c);
+        });
+        actions.appendChild(resumeBtn);
+      } else if(c.pauseRequestPending && c.pauseRequestedByMe){
+        const cancelBtn = document.createElement('button'); cancelBtn.type='button'; cancelBtn.className='detail-action-btn'; cancelBtn.textContent='⏳ Waiting for approval — tap to cancel';
+        cancelBtn.addEventListener('click', ()=> cancelPauseRequest(c));
+        actions.appendChild(cancelBtn);
+      } else if(c.pauseRequestPending && !c.pauseRequestedByMe){
+        // A joint commitment: your co-owner is waiting on YOU to approve --
+        // also reachable from the pause-requests inbox, but surfacing it
+        // right here too means you don't have to go hunting for it.
+        const approveBtn = document.createElement('button'); approveBtn.type='button'; approveBtn.className='detail-action-btn'; approveBtn.textContent='✅ Approve pause';
+        approveBtn.addEventListener('click', async ()=>{
+          if(!c.pauseRequestId) return;
+          await resolvePauseRequest({ id: c.pauseRequestId, commitmentText: c.text }, 'approve');
+          openCommitDetail(c);
+        });
+        const declineBtn = document.createElement('button'); declineBtn.type='button'; declineBtn.className='detail-action-btn danger'; declineBtn.textContent='✕ Decline pause';
+        declineBtn.addEventListener('click', async ()=>{
+          if(!c.pauseRequestId) return;
+          await resolvePauseRequest({ id: c.pauseRequestId, commitmentText: c.text }, 'decline');
+          openCommitDetail(c);
+        });
+        actions.appendChild(approveBtn);
+        actions.appendChild(declineBtn);
+      } else {
+        const pauseBtn = document.createElement('button'); pauseBtn.type='button'; pauseBtn.className='detail-action-btn'; pauseBtn.textContent='⏸ Request pause';
+        pauseBtn.addEventListener('click', ()=> requestPause(c));
+        actions.appendChild(pauseBtn);
+      }
     }
 
     const histBtn = document.createElement('button'); histBtn.type='button'; histBtn.className='detail-action-btn'; histBtn.textContent='📅 History';
@@ -1728,6 +1762,9 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
     local.pawCount = r.pawCount;
     local.lastPaw = r.lastPaw;
     local.lastComment = r.lastComment;
+    local.pauseRequestPending = !!r.pauseRequestPending;
+    local.pauseRequestId = r.pauseRequestId || null;
+    local.pauseRequestedByMe = !!r.pauseRequestedByMe;
   }
 
   async function pushUnsyncedLocalCommitments(){
@@ -1755,6 +1792,108 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
       save(state);
       renderSuggestions();
     }catch(e){ /* non-critical */ }
+  }
+
+  // --- Pause requests: pausing closes off life-loss/leaderboard/reminder
+  // stakes, so it needs the other person's approval rather than being
+  // instant -- especially for a joint commitment, where pausing
+  // unilaterally would affect someone else's stake too. Same inbox-card
+  // style as suggestions, just a different action (approve/decline a pause
+  // rather than accept/amend/reject a new commitment). ---
+  async function fetchPauseRequests(){
+    try{
+      const res = await fetch(apiBase() + '/api/pause-requests', { headers: { authorization: 'Bearer '+authToken } });
+      if(!res.ok) return;
+      state.pauseRequests = await res.json();
+      save(state);
+      renderPauseRequests();
+    }catch(e){ /* non-critical */ }
+  }
+
+  function renderPauseRequests(){
+    if(!pauseRequestsList) return;
+    const list = state.pauseRequests || [];
+    pauseRequestsList.innerHTML = '';
+    pauseRequestsSection.classList.toggle('hidden', list.length === 0);
+    list.forEach(r => {
+      const card = document.createElement('div'); card.className = 'suggestion-card';
+      card.innerHTML = `
+        <p class="suggestion-from">From ${escapeHtml(r.fromName)}</p>
+        <p class="suggestion-text">Pause "${escapeHtml(r.commitmentText)}"?</p>
+      `;
+      const actions = document.createElement('div'); actions.className = 'suggestion-actions';
+      const approveBtn = document.createElement('button'); approveBtn.type='button'; approveBtn.className='primary'; approveBtn.textContent='✅ Approve';
+      approveBtn.addEventListener('click', ()=> resolvePauseRequest(r, 'approve'));
+      const declineBtn = document.createElement('button'); declineBtn.type='button'; declineBtn.className='danger'; declineBtn.textContent='✕ Decline';
+      declineBtn.addEventListener('click', ()=> resolvePauseRequest(r, 'decline'));
+      actions.appendChild(approveBtn); actions.appendChild(declineBtn);
+      card.appendChild(actions);
+      pauseRequestsList.appendChild(card);
+    });
+  }
+
+  async function resolvePauseRequest(r, action){
+    if(!authToken) return;
+    try{
+      const res = await fetch(apiBase() + '/api/pause-requests/' + r.id + '/' + action, { method:'POST', headers: { authorization: 'Bearer '+authToken } });
+      if(res.ok){
+        state.pauseRequests = (state.pauseRequests||[]).filter(x=>x.id!==r.id);
+        save(state);
+        renderPauseRequests();
+        showToast(action === 'approve' ? 'Approved' : 'Declined', action === 'approve' ? `"${r.commitmentText}" is now paused.` : `"${r.commitmentText}" stays active.`);
+        runSync();
+      }
+    }catch(e){ showToast('Offline?', 'Could not reach the server.'); }
+  }
+
+  function otherUserId(userId){
+    return userId === 'anna' ? 'jordan' : (userId === 'jordan' ? 'anna' : null);
+  }
+
+  // Requesting (not instantly applying) a pause -- see the section comment
+  // above. Offline/local-only mode has no "other person" to ask, so pause
+  // stays instant there, same as before.
+  async function requestPause(c){
+    if(!isRemoteMode() || !c.remoteId){
+      c.enabled = false;
+      save(state);
+      pushCommitmentToServer(c);
+      renderList();
+      openCommitDetail(c);
+      return;
+    }
+    try{
+      const res = await fetch(apiBase() + '/api/commitments/' + c.remoteId + '/pause-request', { method:'POST', headers: { authorization: 'Bearer '+authToken } });
+      if(res.ok){
+        const j = await res.json();
+        c.pauseRequestPending = true;
+        c.pauseRequestedByMe = true;
+        c.pauseRequestId = j.id;
+        save(state);
+        renderList();
+        openCommitDetail(c);
+        const other = otherUserId(currentUser);
+        showToast('Pause requested', `Waiting for ${userName(other)} to approve.`);
+      } else {
+        const j = await res.json().catch(()=>null);
+        showToast('Could not request', (j && j.error) || 'Something went wrong.');
+      }
+    }catch(e){ showToast('Offline?', 'Could not reach the server.'); }
+  }
+
+  async function cancelPauseRequest(c){
+    if(!c.pauseRequestId) return;
+    try{
+      const res = await fetch(apiBase() + '/api/pause-requests/' + c.pauseRequestId + '/cancel', { method:'POST', headers: { authorization: 'Bearer '+authToken } });
+      if(res.ok){
+        c.pauseRequestPending = false;
+        c.pauseRequestId = null;
+        save(state);
+        renderList();
+        openCommitDetail(c);
+        showToast('Cancelled', `Withdrew your pause request for "${c.text}".`);
+      }
+    }catch(e){ showToast('Offline?', 'Could not reach the server.'); }
   }
 
   // --- Wellbeing check-in: a rotating, once-every-couple-of-weeks prompt
@@ -1949,6 +2088,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
       renderList();
       fetchUsersXp();
       fetchSuggestions();
+      fetchPauseRequests();
       fetchWellbeingPrompt();
       fetchTodos();
     }catch(e){ console.error('sync failed', e); }

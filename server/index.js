@@ -170,13 +170,14 @@ app.get('/api/commitments', authMiddleware, async (req,res)=>{
     `);
 
     const result = await Promise.all(rows.map(async r => {
-      const [pawCountRow, lastPaw, lastComment] = await Promise.all([
+      const [pawCountRow, lastPaw, lastComment, pauseRequest] = await Promise.all([
         dbGet('SELECT COUNT(*) as count FROM paw_log WHERE commitment_id = ?', [r.id]),
         dbGet(`SELECT p.date, u.name as byName FROM paw_log p JOIN users u ON u.id = p.giver_user_id
                WHERE p.commitment_id = ? ORDER BY p.date DESC LIMIT 1`, [r.id]),
         dbGet(`SELECT cm.text, cm.created_at as createdAt, u.name as byName FROM comments cm
                JOIN users u ON u.id = cm.user_id
-               WHERE cm.commitment_id = ? ORDER BY cm.created_at DESC LIMIT 1`, [r.id])
+               WHERE cm.commitment_id = ? ORDER BY cm.created_at DESC LIMIT 1`, [r.id]),
+        dbGet(`SELECT id, requested_by FROM pause_requests WHERE commitment_id = ? AND status = 'pending'`, [r.id])
       ]);
       return {
         id: r.id,
@@ -202,7 +203,10 @@ app.get('/api/commitments', authMiddleware, async (req,res)=>{
         mine: r.scope === 'joint' || r.ownerId === req.user.id,
         pawCount: pawCountRow ? pawCountRow.count : 0,
         lastPaw: lastPaw ? { date: lastPaw.date, by: lastPaw.byName } : null,
-        lastComment: lastComment ? { text: lastComment.text, by: lastComment.byName, at: lastComment.createdAt } : null
+        lastComment: lastComment ? { text: lastComment.text, by: lastComment.byName, at: lastComment.createdAt } : null,
+        pauseRequestPending: !!pauseRequest,
+        pauseRequestId: pauseRequest ? pauseRequest.id : null,
+        pauseRequestedByMe: pauseRequest ? pauseRequest.requested_by === req.user.id : false
       };
     }));
 
@@ -647,6 +651,103 @@ app.post('/api/suggestions/:id/reject', authMiddleware, async (req,res)=>{
     const owned = await dbGet('SELECT id FROM commitment_suggestions WHERE id = ? AND to_user_id = ?', [id, req.user.id]);
     if(!owned) return res.status(404).json({ error: 'not found' });
     await dbRun('DELETE FROM commitment_suggestions WHERE id = ?', [id]);
+    res.json({ success: true });
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
+});
+
+// --- Pausing a commitment closes off its life-loss/leaderboard/reminder
+// stakes -- for a joint commitment especially, not something one person
+// should be able to do unilaterally to something you're both on the hook
+// for. Pausing goes through a request the OTHER person has to approve; the
+// commitment stays fully enforced while it's pending. Resuming (below, in
+// the ordinary PUT /api/commitments/:id handler) stays instant -- only
+// opting OUT needs the gate, not opting back in. ---
+app.post('/api/commitments/:id/pause-request', authMiddleware, async (req,res)=>{
+  const id = req.params.id;
+  try{
+    const commit = await dbGet('SELECT id, user_id, scope, enabled, text FROM commitments WHERE id = ?', [id]);
+    if(!commit) return res.status(404).json({ error: 'not found' });
+    if(commit.scope !== 'joint' && commit.user_id !== req.user.id) return res.status(403).json({ error: 'not yours' });
+    if(!commit.enabled) return res.status(400).json({ error: 'already paused' });
+    const existing = await dbGet("SELECT id FROM pause_requests WHERE commitment_id = ? AND status = 'pending'", [id]);
+    if(existing) return res.status(409).json({ error: 'a pause request is already pending for this' });
+    const result = await dbRun("INSERT INTO pause_requests (commitment_id, requested_by, status) VALUES (?,?,'pending')", [id, req.user.id]);
+    const myName = (req.user.name || '').toLowerCase();
+    const otherName = myName === 'anna' ? 'jordan' : (myName === 'jordan' ? 'anna' : null);
+    if(otherName){
+      const other = await dbGet('SELECT id FROM users WHERE LOWER(name) = ?', [otherName]);
+      if(other){
+        const rows = await dbAll('SELECT subscription FROM push_subscriptions WHERE user_id = ?', [other.id]);
+        if(rows.length){
+          const payload = JSON.stringify({ title: 'Good Cat 🐾', body: `${req.user.name} wants to pause "${commit.text}"`, tag: 'pause-request-' + result.lastID });
+          sendPushToSubscriptions(rows, payload).catch(()=>{});
+        }
+      }
+    }
+    res.json({ id: result.lastID, status: 'pending' });
+  }catch(e){
+    console.error('POST /api/commitments/:id/pause-request error', e);
+    res.status(500).json({ error: 'db' });
+  }
+});
+
+// Pause requests waiting on ME to approve/decline -- since this app is
+// exactly two people, any pending request not made by me is inherently one
+// only I can act on.
+app.get('/api/pause-requests', authMiddleware, async (req,res)=>{
+  try{
+    const rows = await dbAll(`
+      SELECT pr.id, pr.commitment_id as commitmentId, c.text as commitmentText, u.name as fromName
+      FROM pause_requests pr
+      JOIN commitments c ON c.id = pr.commitment_id
+      JOIN users u ON u.id = pr.requested_by
+      WHERE pr.status = 'pending' AND pr.requested_by != ?
+      ORDER BY pr.created_at ASC
+    `, [req.user.id]);
+    res.json(rows);
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
+});
+
+app.post('/api/pause-requests/:id/approve', authMiddleware, async (req,res)=>{
+  const id = req.params.id;
+  try{
+    const request = await dbGet("SELECT id, commitment_id, requested_by, status FROM pause_requests WHERE id = ?", [id]);
+    if(!request || request.status !== 'pending') return res.status(404).json({ error: 'not found' });
+    if(request.requested_by === req.user.id) return res.status(403).json({ error: 'cannot approve your own request' });
+    await dbRun('UPDATE commitments SET enabled = 0 WHERE id = ?', [request.commitment_id]);
+    await dbRun("UPDATE pause_requests SET status = 'approved' WHERE id = ?", [id]);
+    res.json({ success: true });
+  }catch(e){
+    console.error('POST /api/pause-requests/:id/approve error', e);
+    res.status(500).json({ error: 'db' });
+  }
+});
+
+app.post('/api/pause-requests/:id/decline', authMiddleware, async (req,res)=>{
+  const id = req.params.id;
+  try{
+    const request = await dbGet("SELECT id, requested_by, status FROM pause_requests WHERE id = ?", [id]);
+    if(!request || request.status !== 'pending') return res.status(404).json({ error: 'not found' });
+    if(request.requested_by === req.user.id) return res.status(403).json({ error: 'cannot decline your own request' });
+    await dbRun("UPDATE pause_requests SET status = 'declined' WHERE id = ?", [id]);
+    res.json({ success: true });
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
+});
+
+// The requester withdrawing their own still-pending request.
+app.post('/api/pause-requests/:id/cancel', authMiddleware, async (req,res)=>{
+  const id = req.params.id;
+  try{
+    const request = await dbGet("SELECT id, requested_by, status FROM pause_requests WHERE id = ?", [id]);
+    if(!request || request.status !== 'pending') return res.status(404).json({ error: 'not found' });
+    if(request.requested_by !== req.user.id) return res.status(403).json({ error: 'not your request' });
+    await dbRun("UPDATE pause_requests SET status = 'cancelled' WHERE id = ?", [id]);
     res.json({ success: true });
   }catch(e){
     res.status(500).json({ error: 'db' });
