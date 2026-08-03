@@ -3115,8 +3115,26 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
   // Register the service worker unconditionally so the app shell is cached
   // and works offline once loaded -- previously this only happened as a side
   // effect of enabling notifications, so most sessions never got it at all.
+  //
+  // iOS in particular checks for service-worker updates on a home-screen-
+  // installed app far less reliably than a regular Safari tab -- a session
+  // can sit on a stale, possibly-broken cached app.js indefinitely, looking
+  // exactly like broken buttons, until it happens to update on its own.
+  // Nudge a check every time the app comes back to the foreground, and
+  // reload once a fresh version actually takes over so it's picked up
+  // immediately rather than needing a manual force-quit.
   if('serviceWorker' in navigator){
-    navigator.serviceWorker.register('service-worker.js').catch(e => console.error('service worker registration failed', e));
+    navigator.serviceWorker.register('service-worker.js').then(reg => {
+      const checkForUpdate = () => reg.update().catch(()=>{});
+      document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible') checkForUpdate(); });
+    }).catch(e => console.error('service worker registration failed', e));
+
+    let refreshedOnce = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if(refreshedOnce) return;
+      refreshedOnce = true;
+      location.reload();
+    });
   }
 
   // Expose for debugging
