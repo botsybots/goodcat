@@ -1,5 +1,6 @@
 import { localDateKey, parseLocalDate, nextLocalDate, prevLocalDate, getDayKey, weekStartDate } from './date-utils.js';
 import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSchedule, isTrackerCompliantOnDay, getScheduleDescription, countCompletionsThisWeek, computeStreak, computeWeeklyStreak, trackerMilestoneWeeks, trackerMilestoneLabel, LABEL_CATEGORIES } from './schedule-utils.js';
+import { pickCatImage } from './cat-images.js';
 
 // Simple Accountability App (localStorage-backed)
 (function(){
@@ -76,6 +77,8 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
   const livesJordan = document.getElementById('lives-jordan');
   const councilAnna = document.getElementById('council-anna');
   const councilJordan = document.getElementById('council-jordan');
+  const councilCatAnna = document.getElementById('council-cat-anna');
+  const councilCatJordan = document.getElementById('council-cat-jordan');
   const ackAnna = document.getElementById('ack-anna');
   const ackJordan = document.getElementById('ack-jordan');
   const settingsBtn = document.getElementById('settingsBtn');
@@ -144,6 +147,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
   const leaderboardBody = document.getElementById('leaderboardBody');
   const celebrationOverlay = document.getElementById('celebrationOverlay');
   const celebrationText = document.getElementById('celebrationText');
+  const celebrationCat = document.getElementById('celebrationCat');
   const tabCommitments = document.getElementById('tabCommitments');
   const tabTodos = document.getElementById('tabTodos');
   const tabShopping = document.getElementById('tabShopping');
@@ -152,6 +156,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
   const shoppingView = document.getElementById('shoppingView');
   const wellbeingSection = document.getElementById('wellbeingSection');
   const wellbeingIcon = document.getElementById('wellbeingIcon');
+  const wellbeingCat = document.getElementById('wellbeingCat');
   const wellbeingQuestion = document.getElementById('wellbeingQuestion');
   const todoAddForm = document.getElementById('todoAddForm');
   const todoInput = document.getElementById('todoInput');
@@ -303,9 +308,15 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
     return outputArray;
   }
 
-  function showToast(title, body){
+  // catImage is resolved ONCE by the caller (via pickCatImage) at the moment
+  // the triggering event happens, not re-picked here -- a toast is a single
+  // one-shot DOM element anyway, but keeping the pick call at the call site
+  // is what keeps this consistent with showCelebration() and the council
+  // banner below, which DO need to guard against re-picking on every render.
+  function showToast(title, body, catImage){
     const t = document.createElement('div'); t.className='toast';
-    t.innerHTML = `<h4>${escapeHtml(title)}</h4><p>${escapeHtml(body)}</p>`;
+    const imgHtml = catImage ? `<img class="toast-cat" src="${escapeHtml(catImage.src)}" alt="${escapeHtml(catImage.name)}" />` : '';
+    t.innerHTML = `${imgHtml}<div class="toast-body"><h4>${escapeHtml(title)}</h4><p>${escapeHtml(body)}</p></div>`;
     document.body.appendChild(t);
     setTimeout(()=>{ t.style.opacity='0'; setTimeout(()=>t.remove(),400); },4500);
   }
@@ -349,8 +360,15 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
     celebrationOverlay.classList.add('hidden');
     if(celebrationTimer){ clearTimeout(celebrationTimer); celebrationTimer = null; }
   }
-  function showCelebration(message, { fireworks = true } = {}){
+  function showCelebration(message, { fireworks = true, catImage } = {}){
     celebrationText.textContent = message;
+    if(catImage){
+      celebrationCat.src = catImage.src;
+      celebrationCat.alt = catImage.name;
+      celebrationCat.classList.remove('hidden');
+    } else {
+      celebrationCat.classList.add('hidden');
+    }
     celebrationOverlay.classList.remove('hidden');
     if(fireworks) launchFireworks();
     if(celebrationTimer) clearTimeout(celebrationTimer);
@@ -379,13 +397,14 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
   function pick(arr){ return arr[Math.floor(Math.random() * arr.length)]; }
 
   function celebrateCompletion(c){
+    const catImage = pickCatImage('pleased');
     if(isWeeklyTargetSchedule(c)){
       const count = countCompletionsThisWeek(c, getEffectiveNow());
-      showCelebration(pick(WEEKLY_PROGRESS_MESSAGES)(c.text, count, c.weeklyTarget));
+      showCelebration(pick(WEEKLY_PROGRESS_MESSAGES)(c.text, count, c.weeklyTarget), { catImage });
     } else if(c.streak > 1){
-      showCelebration(pick(STREAK_MESSAGES)(c.text, c.streak));
+      showCelebration(pick(STREAK_MESSAGES)(c.text, c.streak), { catImage });
     } else {
-      showCelebration(pick(FIRST_TIME_MESSAGES)(c.text));
+      showCelebration(pick(FIRST_TIME_MESSAGES)(c.text), { catImage });
     }
   }
 
@@ -413,7 +432,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
     });
     if(!grantedAny) return;
     save(state);
-    setTimeout(()=> showCelebration(pick(RARE_EVENT_MESSAGES)), 2800);
+    setTimeout(()=> showCelebration(pick(RARE_EVENT_MESSAGES), { catImage: pickCatImage('playful') }), 2800);
   }
 
   function userName(id){
@@ -650,7 +669,10 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
           // render (each device needs to display an approximation of the
           // other's lives too), but a toast about someone else's missed
           // habit popping up on your own phone was the actual bug reported.
-          if(userId === currentUser && dayKey === yesterday) showToast('Bots is judging you', `${userName(userId)} missed a scheduled habit yesterday — lost 1 life.`);
+          if(userId === currentUser && dayKey === yesterday){
+            const cat = pickCatImage('judging');
+            showToast(`${cat ? cat.name : 'Bots'} is judging you`, `${userName(userId)} missed a scheduled habit yesterday — lost 1 life.`, cat);
+          }
         }
       }
       // "N times a week" habits are only judged once, at the end of their
@@ -664,7 +686,10 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
           if(compliance.total > 0 && compliance.compliant < compliance.total){
             state.weeklyLifeLosses[userId][weekStartIso] = true;
             state.lives[userId] = Math.max(0, state.lives[userId] - 1);
-            if(userId === currentUser && dayKey === yesterday) showToast('Bots is judging you', `${userName(userId)} missed a weekly target last week — lost 1 life.`);
+            if(userId === currentUser && dayKey === yesterday){
+              const cat = pickCatImage('judging');
+              showToast(`${cat ? cat.name : 'Bots'} is judging you`, `${userName(userId)} missed a weekly target last week — lost 1 life.`, cat);
+            }
           }
         }
       }
@@ -691,7 +716,8 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
             // tier, and stay quiet if nothing did (already at max).
             const actualGain = state.lives[userId] - before;
             if(userId === currentUser && actualGain > 0 && dayKey === yesterday){
-              showToast('Loki is pleased with ' + userName(userId), `Kept up with scheduled habits this past week — gained ${actualGain} ${actualGain === 1 ? 'life' : 'lives'}!`);
+              const cat = pickCatImage('pleased');
+              showToast(`${cat ? cat.name : 'Loki'} is pleased with ` + userName(userId), `Kept up with scheduled habits this past week — gained ${actualGain} ${actualGain === 1 ? 'life' : 'lives'}!`, cat);
             }
           }
         }
@@ -715,12 +741,30 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
     renderLives();
   }
 
+  // Picks a council cat image only on the moment the banner actually
+  // switches from hidden to showing -- renderLives() runs on nearly every
+  // render (any toggle, any sync), so re-picking unconditionally here would
+  // change the face while someone's just scrolling, not on a new event.
+  function updateCouncilBanner(bannerEl, catImgEl, isActive){
+    if(!bannerEl) return;
+    const wasActive = !bannerEl.classList.contains('hidden');
+    bannerEl.classList.toggle('hidden', !isActive);
+    if(isActive && !wasActive && catImgEl){
+      const cat = pickCatImage('judging');
+      if(cat){
+        catImgEl.src = cat.src;
+        catImgEl.alt = cat.name;
+        catImgEl.classList.remove('hidden');
+      }
+    }
+  }
+
   function renderLives(){
     ensureLifeState();
     if(livesAnna) livesAnna.textContent = `${state.lives.anna} / ${MAX_LIVES}`;
     if(livesJordan) livesJordan.textContent = `${state.lives.jordan} / ${MAX_LIVES}`;
-    if(councilAnna) councilAnna.classList.toggle('hidden', !(state.lives.anna <= 0));
-    if(councilJordan) councilJordan.classList.toggle('hidden', !(state.lives.jordan <= 0));
+    updateCouncilBanner(councilAnna, councilCatAnna, state.lives.anna <= 0);
+    updateCouncilBanner(councilJordan, councilCatJordan, state.lives.jordan <= 0);
   }
 
   function renderLevels(){
@@ -1213,7 +1257,7 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
     }
     save(state);
     if(newlyCrossed.length){
-      showCelebration(`🎉 "${c.text}" hit a milestone: ${trackerMilestoneLabel(weeks)}!`);
+      showCelebration(`🎉 "${c.text}" hit a milestone: ${trackerMilestoneLabel(weeks)}!`, { catImage: pickCatImage('pleased') });
     }
   }
 
@@ -1931,11 +1975,30 @@ import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSc
     }catch(e){ /* non-critical */ }
   }
 
+  // fetchWellbeingPrompt() re-sets wellbeingCategory (and calls this) on
+  // every sync while the SAME prompt is still pending -- only pick a new
+  // cat image when the category actually changes to a new prompt, not on
+  // every one of those re-renders.
+  let lastWellbeingCategoryForImage;
+  let wellbeingCatImage = null;
   function renderWellbeingPrompt(){
     if(!wellbeingSection) return;
     if(!wellbeingCategory){ wellbeingSection.classList.add('hidden'); return; }
     wellbeingIcon.textContent = LABEL_ICONS[wellbeingCategory] || '🐾';
     wellbeingQuestion.textContent = WELLBEING_QUESTIONS[wellbeingCategory] || `How's ${wellbeingCategory} been feeling?`;
+    if(wellbeingCategory !== lastWellbeingCategoryForImage){
+      lastWellbeingCategoryForImage = wellbeingCategory;
+      wellbeingCatImage = pickCatImage('neutral');
+    }
+    if(wellbeingCat){
+      if(wellbeingCatImage){
+        wellbeingCat.src = wellbeingCatImage.src;
+        wellbeingCat.alt = wellbeingCatImage.name;
+        wellbeingCat.classList.remove('hidden');
+      } else {
+        wellbeingCat.classList.add('hidden');
+      }
+    }
     wellbeingSection.classList.remove('hidden');
   }
 
