@@ -290,6 +290,17 @@ main.user-columns {
   margin-top: 10px;
 }
 
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.settings-row .small-input {
+  width: auto;
+  max-width: 120px;
+}
+
 .settings-section-label {
   margin-top: 24px;
   font-family: inherit;
@@ -1650,6 +1661,56 @@ footer {
 @keyframes celebrate-pop {
   from { transform: scale(0.6); opacity: 0; }
   to { transform: scale(1); opacity: 1; }
+}
+
+/* Boop: deliberately NOT a full-screen overlay like celebration-overlay --
+   "never blocks the interface" means it only occupies its own small card,
+   with everything else still tappable/scrollable underneath. Dismissal is
+   wired in app.js via a document-level click listener while it's visible. */
+.boop-overlay {
+  position: fixed;
+  top: max(16px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 20px;
+  border-radius: var(--radius-card);
+  background: var(--paper);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-lift);
+  cursor: pointer;
+  max-width: min(280px, calc(100vw - 32px));
+}
+
+.boop-overlay.hidden {
+  display: none;
+}
+
+.boop-cat {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid var(--border);
+  animation: boop-in 280ms cubic-bezier(.34, 1.56, .64, 1);
+}
+
+.boop-text {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--ink);
+  text-align: center;
+  margin: 0;
+}
+
+@keyframes boop-in {
+  0% { transform: scale(0.15); opacity: 0; }
+  70% { transform: scale(1.08); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
 }
 
 .firework-particle {

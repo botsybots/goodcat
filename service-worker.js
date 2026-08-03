@@ -1,6 +1,6 @@
 /* Service Worker for Good Cat -- caches the app shell so it works offline
    once loaded, and still handles push notifications as before. */
-const CACHE_NAME = 'good-cat-v2';
+const CACHE_NAME = 'good-cat-v3';
 const APP_SHELL = [
   './',
   './index.html',
@@ -9,8 +9,12 @@ const APP_SHELL = [
   './schedule-utils.js',
   './styles.css',
   './manifest.json',
-  './icons/icon-192.png',
-  './icons/icon-512.png'
+  './app-icons/icon-192.png',
+  './app-icons/icon-512.png',
+  './app-icons/icon-maskable-192.png',
+  './app-icons/icon-maskable-512.png',
+  './app-icons/apple-touch-icon.png',
+  './app-icons/favicon-32.png'
 ];
 
 self.addEventListener('install', event => {
@@ -57,6 +61,26 @@ self.addEventListener('push', event => {
   let payload = { title: 'Reminder', body: 'You have a reminder' };
   try { payload = event.data.json(); } catch(e) { if(event.data) payload.body = event.data.text(); }
   const title = payload.title || 'Reminder';
+
+  // Boop is the one push type that behaves differently depending on whether
+  // the app is actually open: a focused tab gets the animated in-app nudge
+  // via postMessage (no OS notification at all), while a closed/backgrounded
+  // app gets a plain notification with the same wording. Every other push
+  // type (reminders etc) always shows a notification, unchanged.
+  if(payload.boop){
+    event.waitUntil(
+      self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clientList => {
+        const focused = clientList.find(c => c.focused);
+        if(focused){
+          focused.postMessage({ type: 'boop', body: payload.body || '' });
+          return;
+        }
+        return self.registration.showNotification(title, { body: payload.body || '', data: payload, tag: payload.tag || 'boop' });
+      })
+    );
+    return;
+  }
+
   const options = { body: payload.body || '', data: payload, tag: payload.tag || 'accountability-reminder' };
   event.waitUntil(self.registration.showNotification(title, options));
 });

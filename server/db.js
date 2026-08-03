@@ -47,6 +47,12 @@ async function migrate() {
   if (!userCols.includes('lastProgressReset')) await dbRun('ALTER TABLE users ADD COLUMN lastProgressReset TEXT');
   if (!userCols.includes('lastWellbeingCheckDate')) await dbRun('ALTER TABLE users ADD COLUMN lastWellbeingCheckDate TEXT');
   if (!userCols.includes('wellbeingCategoryIndex')) await dbRun('ALTER TABLE users ADD COLUMN wellbeingCategoryIndex INTEGER DEFAULT 0');
+  // Boop: an opt-in once-a-day nudge (see checkBoop in index.js). Off by
+  // default -- explicitly opt-in, not opt-out, so it never surprises anyone.
+  if (!userCols.includes('boopEnabled')) await dbRun('ALTER TABLE users ADD COLUMN boopEnabled INTEGER DEFAULT 0');
+  if (!userCols.includes('boopHour')) await dbRun('ALTER TABLE users ADD COLUMN boopHour INTEGER DEFAULT 20');
+  if (!userCols.includes('lastBoopSent')) await dbRun('ALTER TABLE users ADD COLUMN lastBoopSent TEXT');
+  if (!userCols.includes('lastSeenAt')) await dbRun('ALTER TABLE users ADD COLUMN lastSeenAt TEXT');
 
   await dbRun(`CREATE TABLE IF NOT EXISTS commitments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

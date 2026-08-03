@@ -9,7 +9,9 @@
     <link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css" />
     <link rel="manifest" href="manifest.json">
-    <link rel="apple-touch-icon" href="icons/icon-192.png">
+    <link rel="icon" href="app-icons/favicon-32.png" sizes="32x32" type="image/png">
+    <link rel="apple-touch-icon" href="app-icons/apple-touch-icon.png" sizes="180x180">
+    <meta name="theme-color" content="#4A2C20">
   </head>
   <body>
     <div class="container">
@@ -182,12 +184,27 @@
           <div class="settings-group">
             <button id="btnEnableNotify" type="button">🔔 Enable Notifications</button>
             <p id="notifyStatus" class="small muted"></p>
+
+            <label class="toggle-switch small full-width"><input type="checkbox" id="boopEnabledToggle" /><span class="toggle-slider"></span><span class="toggle-label">🐾 Boop -- nudge me about missed habits</span></label>
+            <div class="settings-row" id="boopHourRow" style="display:none">
+              <label for="boopHourInput" class="small muted">Nudge time</label>
+              <input id="boopHourInput" class="small-input" type="time" step="3600" value="20:00" />
+            </div>
+            <p class="small muted">At most once a day, and never between midnight and 8am.</p>
+
+            <label class="toggle-switch small full-width"><input type="checkbox" id="soundEnabledToggle" /><span class="toggle-slider"></span><span class="toggle-label">🔊 Sound effects</span></label>
+
             <button id="btnExportData" type="button" style="display:none">Export Backup</button>
             <button id="btnImportData" type="button" style="display:none">Import Backup</button>
             <input id="importFileInput" type="file" accept="application/json" style="display:none" />
             <button id="btnShowState" type="button">🛠 Debug Tools</button>
           </div>
         </div>
+      </div>
+
+      <div id="boopOverlay" class="boop-overlay hidden">
+        <img id="boopCat" class="boop-cat" src="images/loki-closeup.png" alt="Loki" />
+        <p id="boopText" class="boop-text"></p>
       </div>
 
       <div id="debugPanel" class="debug-panel hidden">
@@ -210,6 +227,11 @@
 
           <div class="debug-row">
             <button id="btnDebugRunCheck" type="button">Run end-of-day check now</button>
+          </div>
+
+          <div class="debug-row">
+            <button id="btnDebugTriggerBoop" type="button">Trigger a boop now</button>
+            <span class="small muted">Sends a real push through the server right now, bypassing the once-a-day cap and quiet hours -- needs notifications enabled above first.</span>
           </div>
 
           <div class="debug-row">

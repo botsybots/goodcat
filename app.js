@@ -1,6 +1,7 @@
 import { localDateKey, parseLocalDate, nextLocalDate, prevLocalDate, getDayKey, weekStartDate } from './date-utils.js';
 import { isScheduledDay, isWeeklyTargetSchedule, isDeadlineSchedule, isTrackerSchedule, isTrackerCompliantOnDay, getScheduleDescription, countCompletionsThisWeek, computeStreak, computeWeeklyStreak, trackerMilestoneWeeks, trackerMilestoneLabel, LABEL_CATEGORIES } from './schedule-utils.js';
 import { pickCatImage } from './cat-images.js';
+import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
 
 // Simple Accountability App (localStorage-backed)
 (function(){
@@ -73,6 +74,14 @@ import { pickCatImage } from './cat-images.js';
   const btnImportData = document.getElementById('btnImportData');
   const importFileInput = document.getElementById('importFileInput');
   const notifyStatus = document.getElementById('notifyStatus');
+  const boopEnabledToggle = document.getElementById('boopEnabledToggle');
+  const boopHourRow = document.getElementById('boopHourRow');
+  const boopHourInput = document.getElementById('boopHourInput');
+  const soundEnabledToggle = document.getElementById('soundEnabledToggle');
+  const btnDebugTriggerBoop = document.getElementById('btnDebugTriggerBoop');
+  const boopOverlay = document.getElementById('boopOverlay');
+  const boopCat = document.getElementById('boopCat');
+  const boopText = document.getElementById('boopText');
   const livesAnna = document.getElementById('lives-anna');
   const livesJordan = document.getElementById('lives-jordan');
   const councilAnna = document.getElementById('council-anna');
@@ -275,6 +284,55 @@ import { pickCatImage } from './cat-images.js';
     }
   });
 
+  // Boop's enabled/hour setting is stored server-side, per person -- the
+  // server-side scheduler (checkBoop in index.js) needs to know it even when
+  // this particular device isn't the one open. Sound is a pure per-device
+  // preference (see sound.js), so it just reads/writes localStorage.
+  async function loadBoopSettings(){
+    if(soundEnabledToggle) soundEnabledToggle.checked = isSoundEnabled();
+    if(!authToken || !boopEnabledToggle) return;
+    try{
+      const res = await fetch(apiBase() + '/api/boop-settings', { headers: { authorization: 'Bearer '+authToken } });
+      if(!res.ok) return;
+      const { enabled, hour } = await res.json();
+      boopEnabledToggle.checked = enabled;
+      if(boopHourRow) boopHourRow.style.display = enabled ? '' : 'none';
+      if(boopHourInput) boopHourInput.value = String(hour).padStart(2, '0') + ':00';
+    }catch(e){ /* settings just won't refresh this time -- not worth surfacing */ }
+  }
+  settingsBtn.addEventListener('click', loadBoopSettings);
+
+  async function saveBoopSettings(){
+    if(!authToken) return;
+    const enabled = !!(boopEnabledToggle && boopEnabledToggle.checked);
+    if(boopHourRow) boopHourRow.style.display = enabled ? '' : 'none';
+    const hourParsed = boopHourInput ? parseInt(boopHourInput.value.split(':')[0], 10) : 20;
+    const hour = Number.isNaN(hourParsed) ? 20 : hourParsed;
+    try{
+      await fetch(apiBase() + '/api/boop-settings', { method: 'PUT', headers: { 'content-type':'application/json', authorization: 'Bearer '+authToken }, body: JSON.stringify({ enabled, hour }) });
+    }catch(e){ console.error('save boop settings failed', e); }
+  }
+  if(boopEnabledToggle) boopEnabledToggle.addEventListener('change', saveBoopSettings);
+  if(boopHourInput) boopHourInput.addEventListener('change', saveBoopSettings);
+  if(soundEnabledToggle) soundEnabledToggle.addEventListener('change', ()=> setSoundEnabled(soundEnabledToggle.checked));
+
+  // Sends a real push through the real server pathway right now, bypassing
+  // the once-a-day cap/quiet-hours/completion checks that gate the
+  // automatic scheduler -- so this is how Boop can actually be seen working
+  // (both halves: in-app animation if this tab is focused, plain OS
+  // notification otherwise) without waiting for the real trigger conditions.
+  if(btnDebugTriggerBoop){
+    btnDebugTriggerBoop.addEventListener('click', async ()=>{
+      if(!authToken) return alert('login first');
+      try{
+        const res = await fetch(apiBase() + '/api/boop/trigger', { method: 'POST', headers: { authorization: 'Bearer '+authToken } });
+        const data = await res.json().catch(()=>({}));
+        if(!res.ok){ alert(data.error || 'Boop failed.'); return; }
+        showToast('Boop sent', 'Watch for the in-app animation (if this tab stays focused) or a notification.');
+      }catch(e){ alert('Boop request failed.'); }
+    });
+  }
+
   // show/hide custom days / deadline date when schedule selector changes
   commitSchedule.addEventListener('change', ()=>{
     customDays.style.display = commitSchedule.value === 'custom' ? 'block' : 'none';
@@ -376,6 +434,42 @@ import { pickCatImage } from './cat-images.js';
   }
   celebrationOverlay.addEventListener('click', hideCelebration);
 
+  // Boop's in-app half: a small non-blocking card (not a full-screen
+  // overlay like celebration -- everything underneath stays tappable),
+  // dismissed by tapping anywhere. Reached two ways: the debug "Trigger a
+  // boop now" button (which goes through a real server push) and a real
+  // push whose service-worker handler decides the app is currently focused
+  // and postMessages here instead of showing an OS notification.
+  let boopDismissTimer = null;
+  function dismissBoop(){
+    if(!boopOverlay) return;
+    boopOverlay.classList.add('hidden');
+    document.removeEventListener('click', dismissBoopOnTap);
+    if(boopDismissTimer){ clearTimeout(boopDismissTimer); boopDismissTimer = null; }
+  }
+  function dismissBoopOnTap(){ dismissBoop(); }
+  function showBoopAnimation(text){
+    if(!boopOverlay) return;
+    playSound('meow');
+    if(boopText) boopText.textContent = text || 'Boop.';
+    boopOverlay.classList.remove('hidden');
+    // Re-trigger the CSS pop-in animation even if it's already showing.
+    if(boopCat){ boopCat.style.animation = 'none'; void boopCat.offsetWidth; boopCat.style.animation = ''; }
+    // Deferred so the click that triggered this (e.g. the debug button)
+    // doesn't immediately dismiss it via bubbling.
+    document.removeEventListener('click', dismissBoopOnTap);
+    setTimeout(()=> document.addEventListener('click', dismissBoopOnTap), 0);
+    if(boopDismissTimer) clearTimeout(boopDismissTimer);
+    boopDismissTimer = setTimeout(dismissBoop, 8000);
+  }
+  if(boopOverlay) boopOverlay.addEventListener('click', dismissBoop);
+
+  if('serviceWorker' in navigator){
+    navigator.serviceWorker.addEventListener('message', event => {
+      if(event.data && event.data.type === 'boop') showBoopAnimation(event.data.body);
+    });
+  }
+
   const FIRST_TIME_MESSAGES = [
     task => `Nice start on "${task}"! Day one in the books. 🐾`,
     task => `"${task}" — logged! Every streak starts somewhere.`,
@@ -397,6 +491,7 @@ import { pickCatImage } from './cat-images.js';
   function pick(arr){ return arr[Math.floor(Math.random() * arr.length)]; }
 
   function celebrateCompletion(c){
+    playSound('chirrup');
     const catImage = pickCatImage('pleased');
     if(isWeeklyTargetSchedule(c)){
       const count = countCompletionsThisWeek(c, getEffectiveNow());
@@ -671,6 +766,7 @@ import { pickCatImage } from './cat-images.js';
           // habit popping up on your own phone was the actual bug reported.
           if(userId === currentUser && dayKey === yesterday){
             const cat = pickCatImage('judging');
+            if(cat && cat.cat === 'bots') playSound('meow');
             showToast(`${cat ? cat.name : 'Bots'} is judging you`, `${userName(userId)} missed a scheduled habit yesterday — lost 1 life.`, cat);
           }
         }
@@ -688,6 +784,7 @@ import { pickCatImage } from './cat-images.js';
             state.lives[userId] = Math.max(0, state.lives[userId] - 1);
             if(userId === currentUser && dayKey === yesterday){
               const cat = pickCatImage('judging');
+              if(cat && cat.cat === 'bots') playSound('meow');
               showToast(`${cat ? cat.name : 'Bots'} is judging you`, `${userName(userId)} missed a weekly target last week — lost 1 life.`, cat);
             }
           }
@@ -749,6 +846,9 @@ import { pickCatImage } from './cat-images.js';
     if(!bannerEl) return;
     const wasActive = !bannerEl.classList.contains('hidden');
     bannerEl.classList.toggle('hidden', !isActive);
+    if(isActive && !wasActive){
+      playSound('meow');
+    }
     if(isActive && !wasActive && catImgEl){
       const cat = pickCatImage('judging');
       if(cat){

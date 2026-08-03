@@ -143,6 +143,45 @@ app.get('/api/me', authMiddleware, async (req,res)=>{
   }
 });
 
+// Boop settings are opt-in and per-person -- each phone reads/writes only
+// its own logged-in user's row.
+app.get('/api/boop-settings', authMiddleware, async (req,res)=>{
+  try{
+    const row = await dbGet('SELECT boopEnabled, boopHour FROM users WHERE id = ?', [req.user.id]);
+    res.json({ enabled: !!(row && row.boopEnabled), hour: (row && row.boopHour != null) ? row.boopHour : 20 });
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
+});
+
+app.put('/api/boop-settings', authMiddleware, async (req,res)=>{
+  const { enabled, hour } = req.body;
+  const hourVal = Number.isInteger(hour) && hour >= 0 && hour <= 23 ? hour : 20;
+  try{
+    await dbRun('UPDATE users SET boopEnabled = ?, boopHour = ? WHERE id = ?', [enabled ? 1 : 0, hourVal, req.user.id]);
+    res.json({ enabled: !!enabled, hour: hourVal });
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
+});
+
+// Testing endpoint -- sends a real boop push through the real webpush
+// pathway right now, bypassing the daily cap/quiet-hours/completion checks
+// (those govern the automatic scheduler, not manual testing). This is how
+// Anna can see the whole open-app-vs-closed-app branch working (in
+// service-worker.js) without waiting for her actual boop hour.
+app.post('/api/boop/trigger', authMiddleware, async (req,res)=>{
+  try{
+    const subs = await dbAll('SELECT subscription FROM push_subscriptions WHERE user_id = ?', [req.user.id]);
+    if(!subs.length) return res.status(400).json({ error: 'No push subscription yet -- tap "Enable Notifications" in Settings first.' });
+    const payload = JSON.stringify({ title: 'Good Cat 🐾', body: 'Boop. Loki would like a word.', tag: 'boop', boop: true });
+    const results = await sendPushToSubscriptions(subs, payload);
+    res.json({ results });
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
+});
+
 // Both people's XP, so each phone can show a level badge on both panels
 // (mirrors how Lives is already shown for both people on either device).
 app.get('/api/users', authMiddleware, async (req,res)=>{
@@ -160,6 +199,10 @@ app.get('/api/users', authMiddleware, async (req,res)=>{
 // to your own (enforced on the POST/PUT/DELETE routes below).
 app.get('/api/commitments', authMiddleware, async (req,res)=>{
   try{
+    // This is the endpoint the app hits on every load and every periodic
+    // sync, so it's the natural place to record "last seen" for the Boop
+    // feature's 2-day-inactivity trigger -- no separate heartbeat needed.
+    await dbRun('UPDATE users SET lastSeenAt = ? WHERE id = ?', [new Date().toISOString(), req.user.id]);
     const rows = await dbAll(`
       SELECT c.id, c.text, c.enabled, c.doneToday, c.schedule, c.scheduleDays,
              c.reminderEnabled, c.reminderTime, c.weeklyTarget, c.streak, c.lastDone,
@@ -1131,6 +1174,61 @@ async function checkWeeklyCategoryGaps(){
 
 setInterval(checkWeeklyCategoryGaps, 60 * 1000);
 checkWeeklyCategoryGaps();
+
+// Boop: a gentle once-a-day nudge, separate from the per-commitment and
+// end-of-day reminders above. Two triggers -- (a) it's this person's chosen
+// evening hour and something scheduled today is still unlogged, or (b) they
+// haven't opened the app in 2+ days -- both gated by the same rules: opt-in,
+// quiet hours (00:00-08:00), max one per day, and never if everything
+// scheduled today is already done. The actual open-app-vs-closed-app
+// branching (animated in-app vs plain OS notification) happens client-side
+// in service-worker.js's push handler; this just decides WHETHER to send.
+const DEFAULT_BOOP_HOUR = 20;
+const BOOP_INACTIVITY_DAYS = 2;
+async function checkBoop(){
+  const now = new Date();
+  if(now.getHours() < 8) return; // quiet hours -- skip the whole pass
+  const today = localDateKey(now);
+  try{
+    const users = await dbAll('SELECT id, boopEnabled, boopHour, lastBoopSent, lastSeenAt FROM users');
+    for(const user of users){
+      if(!user.boopEnabled) continue;
+      if(user.lastBoopSent === today) continue; // once/day cap
+
+      const boopHour = Number.isInteger(user.boopHour) ? user.boopHour : DEFAULT_BOOP_HOUR;
+      const eveningTrigger = now.getHours() === boopHour && now.getMinutes() === 0;
+      const daysSinceSeen = user.lastSeenAt ? (now - new Date(user.lastSeenAt)) / (1000 * 60 * 60 * 24) : Infinity;
+      const inactivityTrigger = daysSinceSeen >= BOOP_INACTIVITY_DAYS;
+      if(!eveningTrigger && !inactivityTrigger) continue;
+
+      const commits = await dbAll("SELECT schedule, scheduleDays, deadlineDate, doneToday FROM commitments WHERE (user_id = ? OR scope = 'joint') AND enabled = 1", [user.id]);
+      const scheduledToday = commits.filter(c => c.schedule !== 'tracker' && isScheduledDay({ schedule: c.schedule, scheduleDays: c.scheduleDays ? JSON.parse(c.scheduleDays) : null, deadlineDate: c.deadlineDate }, today));
+      const outstanding = scheduledToday.filter(c => !c.doneToday);
+
+      // Nothing to nudge about: everything scheduled today is already done.
+      if(scheduledToday.length > 0 && outstanding.length === 0) continue;
+      // The evening trigger is specifically about an unlogged habit -- if
+      // there's nothing scheduled at all today, only inactivity can still
+      // justify a boop.
+      if(eveningTrigger && !inactivityTrigger && outstanding.length === 0) continue;
+
+      const body = outstanding.length === 1 ? 'One thing still outstanding.'
+        : outstanding.length > 1 ? `${outstanding.length} things still outstanding.`
+        : 'Loki would like a word.';
+
+      const subs = await dbAll('SELECT subscription FROM push_subscriptions WHERE user_id = ?', [user.id]);
+      await dbRun('UPDATE users SET lastBoopSent = ? WHERE id = ?', [today, user.id]);
+      if(!subs.length) continue;
+      const payload = JSON.stringify({ title: 'Good Cat 🐾', body: `Boop. ${body}`, tag: 'boop', boop: true });
+      await sendPushToSubscriptions(subs, payload);
+    }
+  }catch(e){
+    console.error('checkBoop error', e);
+  }
+}
+
+setInterval(checkBoop, 60 * 1000);
+checkBoop();
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, ()=>console.log('API listening on', PORT));
