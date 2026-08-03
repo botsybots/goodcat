@@ -1358,7 +1358,8 @@ footer {
 }
 
 #todosView.hidden,
-#commitmentsView.hidden {
+#commitmentsView.hidden,
+#shoppingView.hidden {
   display: none;
 }
 
