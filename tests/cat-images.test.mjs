@@ -53,22 +53,26 @@ test('pickCatImage: never returns a currently-missing file', () => {
 });
 
 test('pickCatImage: never repeats the same file twice in a row within the same cat+mood pool', () => {
-  // A more direct test of the no-repeat rule: run many picks for a mood
-  // where at least one cat's pool has exactly 2 options (loki-judging:
-  // loki-upside, loki-closeup) and confirm we never see the same loki file
-  // twice in a row across consecutive LOKI picks specifically.
-  let lastLokiFile = null;
-  let sawLokiTwice = false;
-  for (let i = 0; i < 400; i++) {
+  // "judging" is single-cat (bots, 5 options) so every consecutive pick
+  // exercises the no-repeat rule directly.
+  let lastFile = null;
+  for (let i = 0; i < 100; i++) {
     const pick = pickCatImage('judging');
-    if (!pick || pick.cat !== 'loki') continue;
-    if (lastLokiFile !== null) {
-      sawLokiTwice = true;
-      assert(pick.file !== lastLokiFile, `repeated "${pick.file}" back-to-back within loki-judging pool`);
-    }
-    lastLokiFile = pick.file;
+    if (lastFile !== null) assert(pick.file !== lastFile, `repeated "${pick.file}" back-to-back within judging pool`);
+    lastFile = pick.file;
   }
-  assert(sawLokiTwice, 'test did not actually exercise consecutive loki-judging picks -- increase iterations');
+});
+
+test('pickCatImage: "judging" always resolves to Bots, "pleased" always resolves to Loki', () => {
+  // Bots is the one who judges, Loki is the one who's pleased -- these two
+  // moods are tied to a specific personality, not randomized between cats,
+  // unlike neutral/playful.
+  for (let i = 0; i < 50; i++) {
+    const judging = pickCatImage('judging');
+    assert(judging.cat === 'bots', `expected judging to be bots, got "${judging.cat}"`);
+    const pleased = pickCatImage('pleased');
+    assert(pleased.cat === 'loki', `expected pleased to be loki, got "${pleased.cat}"`);
+  }
 });
 
 test('pickCatImage: a pool with only one available option (after filtering missing files) never hangs or errors', () => {

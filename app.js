@@ -766,7 +766,7 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
           // habit popping up on your own phone was the actual bug reported.
           if(userId === currentUser && dayKey === yesterday){
             const cat = pickCatImage('judging');
-            if(cat && cat.cat === 'bots') playSound('meow');
+            playSound('meow');
             showToast(`${cat ? cat.name : 'Bots'} is judging you`, `${userName(userId)} missed a scheduled habit yesterday — lost 1 life.`, cat);
           }
         }
@@ -784,7 +784,7 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
             state.lives[userId] = Math.max(0, state.lives[userId] - 1);
             if(userId === currentUser && dayKey === yesterday){
               const cat = pickCatImage('judging');
-              if(cat && cat.cat === 'bots') playSound('meow');
+              playSound('meow');
               showToast(`${cat ? cat.name : 'Bots'} is judging you`, `${userName(userId)} missed a weekly target last week — lost 1 life.`, cat);
             }
           }

@@ -1,8 +1,10 @@
 // Mood-pool photo picker for Bots (ginger) and Loki (tabby). Each cat has
-// its own complete set of four mood pools; a pick always resolves a CAT
-// first (random, either one) and then an image from that cat's pool for
-// the requested mood -- never a flat pool mixing both cats, since the
-// pools are kept genuinely separate per cat.
+// its own complete set of four mood pools. "judging" and "pleased" are each
+// tied to one specific cat -- Bots is the one who judges, Loki is the one
+// who's pleased -- so those moods always resolve to that cat's pool.
+// "neutral" and "playful" aren't tied to a personality, so those still pick
+// either cat at random. Never a flat pool mixing both cats for a given pick,
+// since the pools are kept genuinely separate per cat.
 const POOLS = {
   bots: {
     neutral: ['bots-close', 'bots-loaf', 'bots-blanket', 'bots-shelf', 'bots-rug'],
@@ -39,7 +41,10 @@ const lastPick = {};
 // on to the result, not call it again on every re-render, or the face will
 // visibly change while the user is just scrolling.
 export function pickCatImage(mood){
-  const cats = Math.random() < 0.5 ? ['bots', 'loki'] : ['loki', 'bots'];
+  let cats;
+  if(mood === 'judging') cats = ['bots'];
+  else if(mood === 'pleased') cats = ['loki'];
+  else cats = Math.random() < 0.5 ? ['bots', 'loki'] : ['loki', 'bots'];
   for(const cat of cats){
     const pool = availablePool(cat, mood);
     if(!pool.length) continue;
