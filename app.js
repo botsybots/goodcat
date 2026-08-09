@@ -69,6 +69,9 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
   const btnLogin = document.getElementById('btnLogin');
   const btnLogout = document.getElementById('btnLogout');
   const btnSync = document.getElementById('btnSync');
+  const resetPasswordUser = document.getElementById('resetPasswordUser');
+  const resetPasswordNew = document.getElementById('resetPasswordNew');
+  const btnResetPassword = document.getElementById('btnResetPassword');
   const btnEnableNotify = document.getElementById('btnEnableNotify');
   const btnExportData = document.getElementById('btnExportData');
   const btnImportData = document.getElementById('btnImportData');
@@ -2513,6 +2516,33 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
     await runSync();
     showToast('Synced', 'Up to date with the server.');
   });
+
+  // No email/phone on file for either account, so there's no self-service
+  // "forgot password" flow -- being logged in as either person is enough to
+  // set a new password for either account, which is what actually recovers
+  // a locked-out account (the target's OWN current password is never
+  // needed, on purpose).
+  if(btnResetPassword){
+    btnResetPassword.addEventListener('click', async ()=>{
+      if(!authToken) return alert('Login first.');
+      const targetUser = resetPasswordUser.value;
+      const newPassword = resetPasswordNew.value;
+      if(!newPassword) return showToast('Enter a password', 'Type a new password first.');
+      if(!confirm(`Set a new password for ${userName(targetUser)}? They'll need to log in again with it on their own phone.`)) return;
+      try{
+        const res = await fetch(apiBase() + '/api/reset-password', { method:'POST', headers:{ 'content-type':'application/json', authorization:'Bearer '+authToken }, body: JSON.stringify({ username: targetUser, newPassword }) });
+        if(!res.ok){
+          const j = await res.json().catch(()=>null);
+          showToast('Not this time', (j && j.error) || 'Could not reset that password.');
+          return;
+        }
+        resetPasswordNew.value = '';
+        showToast('Password set', `${userName(targetUser)}'s password has been changed.`);
+      }catch(e){
+        showToast('Offline?', 'Could not reach the server.');
+      }
+    });
+  }
 
   settingsBtn.addEventListener('click', ()=> settingsPanel.classList.remove('hidden'));
   settingsClose.addEventListener('click', ()=> settingsPanel.classList.add('hidden'));

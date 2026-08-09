@@ -134,6 +134,28 @@ app.post('/api/login', async (req,res)=>{
   }
 });
 
+// There's no email/phone on file for either account and no self-service
+// "forgot password" flow -- this app is exactly two trusted people, so
+// being logged in as EITHER one is enough to set a new password for
+// EITHER account (including your own -- covers "I want to change my
+// password" too, not just recovering the other person's). Deliberately
+// doesn't require the target's current password, since the whole point is
+// recovering an account nobody can currently log into.
+app.post('/api/reset-password', authMiddleware, async (req,res)=>{
+  const { username, newPassword } = req.body;
+  if(!username || !newPassword) return res.status(400).json({ error: 'username and newPassword required' });
+  const normalizedName = String(username).trim().toLowerCase();
+  if(!ALLOWED_USERNAMES.includes(normalizedName)) return res.status(400).json({ error: 'unknown username' });
+  try{
+    const hash = await bcrypt.hash(newPassword, 10);
+    const result = await dbRun('UPDATE users SET password = ? WHERE LOWER(name) = ?', [hash, normalizedName]);
+    if(!result.changes) return res.status(404).json({ error: 'that account does not exist yet -- register it first' });
+    res.json({ success: true });
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
+});
+
 // Current user's XP (levels are computed client-side from this number).
 app.get('/api/me', authMiddleware, async (req,res)=>{
   try{
