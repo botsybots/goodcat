@@ -993,6 +993,13 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
     // what they actually do.
     if(btnShowState) btnShowState.style.display = currentUser === 'anna' ? '' : 'none';
     if(dangerZoneSection) dangerZoneSection.style.display = currentUser === 'anna' ? '' : 'none';
+    // Defaults to the OTHER person, not whoever's currently logged in --
+    // recovering the other person's forgotten password is the whole point
+    // of this tool, so that should be the default rather than something you
+    // have to remember to switch (picking your own account by accident
+    // silently changes YOUR password instead of theirs, while they stay
+    // locked out with no error to notice).
+    if(resetPasswordUser) resetPasswordUser.value = currentUser === 'anna' ? 'jordan' : 'anna';
     applyLayoutForCurrentUser();
   }
 
