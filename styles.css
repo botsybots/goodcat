@@ -1064,21 +1064,30 @@ button.menu-item:hover {
 }
 
 .modal {
+  position: fixed;
   inset: 0;
   background: rgba(44, 35, 28, 0.5);
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 20px;
+  /* Opened from within the commitment detail popup (.panel-modal, z-index
+     20), so it has to sit above it -- otherwise, with no position/z-index,
+     it fell into normal document flow and rendered as a detached box below
+     the popup instead of a centered overlay. */
+  z-index: 40;
 }
 
 .modal-content {
   width: 100%;
   max-width: 720px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
   background: var(--paper);
   border: 1px solid var(--border);
   border-radius: var(--radius-panel);
   padding: 22px;
+  box-shadow: var(--shadow-lift);
 }
 
 .heatmap {
