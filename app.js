@@ -1079,7 +1079,13 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
     // here would route an ordinary edit (pause, rename, etc.) through the
     // server's doneToday branch, which increments today's completion_log
     // count on every single push, not just an actual log event.
-    if(!isTrackerSchedule(c)) payload.doneToday = c.doneToday;
+    // Send THIS device's local date as "today" so the server records the
+    // completion under the same day the client will later recompute
+    // "done today" against. Without it the server stamps the row with its
+    // own clock (UTC on Render), and any client in another timezone sees the
+    // mark silently revert on the next sync when history.includes(appToday())
+    // no longer matches. Old servers ignore the extra field.
+    if(!isTrackerSchedule(c)){ payload.doneToday = c.doneToday; payload.today = appToday(); }
     try{
       let res;
       if(c.remoteId){
@@ -3119,7 +3125,11 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
       try{
         const res = await fetch(apiBase() + '/api/commitments/' + commit.remoteId + '/history/' + dayIso, {
           method: 'PUT', headers: { 'content-type':'application/json', authorization: 'Bearer '+authToken },
-          body: JSON.stringify({ done: markDone })
+          // Send this device's local "today" so the server's "before today"
+          // backfill guard is evaluated against the user's own day, not its
+          // UTC clock -- otherwise a client ahead of UTC can't backfill its
+          // own yesterday (that date can equal the server's today).
+          body: JSON.stringify({ done: markDone, today: appToday() })
         });
         if(res.ok){
           const j = await res.json();

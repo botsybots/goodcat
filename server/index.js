@@ -15,6 +15,18 @@ app.use(express.json());
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 
+// "Today" is the CLIENT's local day, not the server's. This process runs in
+// UTC on Render, so keying completion dates off the server clock stamped rows
+// with a day that a phone in another timezone would then fail to match when it
+// recomputes "done today" -- making marks silently revert, and making a
+// client's own "yesterday" un-backfillable when it equalled the server's UTC
+// today. The client now sends its local date; use it when it's a valid
+// YYYY-MM-DD, and fall back to the server clock for older clients that don't.
+function clientToday(req){
+  const t = req && req.body && req.body.today;
+  return (typeof t === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(t)) ? t : localDateKey(new Date());
+}
+
 // This app is built for exactly two people. Registration used to be open to
 // anyone who found the URL, and every authenticated endpoint returned both
 // people's full data to whoever asked -- so a stranger registering an
@@ -411,7 +423,7 @@ app.put('/api/commitments/:id', authMiddleware, async (req,res)=>{
     if (doneToday !== undefined) {
       const row = await dbGet('SELECT schedule, scheduleDays, target, achieved, achievedAt, doneToday FROM commitments WHERE id = ?', [id]);
       if(!row) return res.status(404).json({ error: 'not found' });
-      const today = localDateKey(new Date());
+      const today = clientToday(req);
       const effectiveScheduleDays = scheduleDays !== undefined ? scheduleDays : (row.scheduleDays ? JSON.parse(row.scheduleDays) : null);
       const effectiveScheduleDaysJson = effectiveScheduleDays ? JSON.stringify(effectiveScheduleDays) : null;
       const effectiveSchedule = schedule || row.schedule;
@@ -514,7 +526,7 @@ app.put('/api/commitments/:id/history/:date', authMiddleware, async (req,res)=>{
     const owner = await dbGet('SELECT user_id, scope, schedule, scheduleDays, target, achieved, achievedAt FROM commitments WHERE id = ?', [id]);
     if(!owner || (owner.user_id !== req.user.id && owner.scope !== 'joint')) return res.status(404).json({ error: 'not found' });
     if(owner.schedule === 'tracker') return res.status(400).json({ error: 'backfilling is not supported for trackers' });
-    const today = localDateKey(new Date());
+    const today = clientToday(req);
     if(!date || date >= today) return res.status(400).json({ error: 'can only backfill a date before today' });
 
     const existing = await dbGet('SELECT date FROM completion_log WHERE commitment_id = ? AND date = ?', [id, date]);
