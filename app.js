@@ -151,6 +151,7 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
   const suggestModalHint = document.getElementById('suggestModalHint');
   const btnLeaderboard = document.getElementById('btnLeaderboard');
   const btnResetProgress = document.getElementById('btnResetProgress');
+  const btnStartFresh = document.getElementById('btnStartFresh');
   const leaderboardModal = document.getElementById('leaderboardModal');
   const leaderboardClose = document.getElementById('leaderboardClose');
   const leaderboardBody = document.getElementById('leaderboardBody');
@@ -2871,6 +2872,48 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
       renderList();
       toggleDebugPanel(false);
       showToast('Reset complete', `${userName(currentUser)} is back to 9/9 lives and 0 XP.`);
+      runSync();
+    });
+  }
+
+  // --- Start fresh: a genuine joint wipe, not scoped to just the caller --
+  // deletes every commitment for BOTH people server-side, then clears this
+  // device's local commitments and resets BOTH people's local life state to
+  // 9/9. Lives are purely client-side (see updateLivesForUser), so this only
+  // ever fixes what THIS device shows -- the other person needs to tap the
+  // same button once on their own phone too (harmless to run twice: the
+  // second call just finds nothing left to delete). ---
+  if(btnStartFresh){
+    btnStartFresh.addEventListener('click', async ()=>{
+      if(!authToken) return alert('Login first.');
+      if(!confirm('Delete every habit for both of you and start fresh? This removes all commitments, history, comments, and paws, and sets lives back to 9/9 for both people. To-dos and the shopping list are untouched. This cannot be undone.')) return;
+      try{
+        const res = await fetch(apiBase() + '/api/reset-everything', { method:'POST', headers:{ authorization:'Bearer '+authToken } });
+        if(!res.ok){
+          const j = await res.json().catch(()=>null);
+          showToast('Not this time', (j && j.error) || 'Could not reset.');
+          return;
+        }
+      }catch(e){
+        showToast('Offline?', 'Could not reach the server.');
+        return;
+      }
+
+      ensureLifeState();
+      state.commitments = [];
+      ['anna','jordan'].forEach(u=>{
+        state.lives[u] = MAX_LIVES;
+        state.lifeLastEvaluatedDate[u] = prevLocalDate(appToday());
+        state.lifeGains[u] = {};
+        state.lifeLosses[u] = {};
+        state.weeklyLifeLosses[u] = {};
+        state.lifeCouncilAck[u] = false;
+      });
+      state.usersXp = { anna: 0, jordan: 0 };
+      save(state);
+      renderList();
+      toggleDebugPanel(false);
+      showToast('Fresh start', 'All habits are gone and lives are back to 9/9. The other person should tap "Start fresh" once on their own phone too.');
       runSync();
     });
   }

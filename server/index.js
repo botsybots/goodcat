@@ -836,6 +836,35 @@ app.post('/api/me/reset', authMiddleware, async (req,res)=>{
   }
 });
 
+// "Start fresh" -- a genuine joint wipe, unlike /api/me/reset above: deletes
+// every commitment for BOTH people (personal and joint), along with their
+// history/comments/paws/pending pause-requests, plus any pending
+// suggestions, and zeroes both people's XP. Deliberately not scoped to the
+// caller's own data -- this is for "we agreed to start over," not a
+// per-person escape hatch, so no cooldown either. Leaves accounts, todos,
+// and the shopping list untouched. Lives aren't touched here since they're
+// purely client-side -- the client mirrors this locally for whoever
+// triggered it, and the other person needs to tap the same button once on
+// their own device.
+app.post('/api/reset-everything', authMiddleware, async (req,res)=>{
+  try{
+    const commits = await dbAll('SELECT id FROM commitments');
+    for(const c of commits){
+      await dbRun('DELETE FROM completion_log WHERE commitment_id = ?', [c.id]);
+      await dbRun('DELETE FROM paw_log WHERE commitment_id = ?', [c.id]);
+      await dbRun('DELETE FROM comments WHERE commitment_id = ?', [c.id]);
+      await dbRun('DELETE FROM pause_requests WHERE commitment_id = ?', [c.id]);
+    }
+    await dbRun('DELETE FROM commitments');
+    await dbRun('DELETE FROM commitment_suggestions');
+    await dbRun('UPDATE users SET xp = 0');
+    res.json({ success: true });
+  }catch(e){
+    console.error('POST /api/reset-everything error', e);
+    res.status(500).json({ error: 'db' });
+  }
+});
+
 // This week's completion rate per person, Mon-Sun, for the leaderboard.
 app.get('/api/leaderboard/weekly', authMiddleware, async (req,res)=>{
   try{
