@@ -1084,7 +1084,7 @@ button.menu-item:hover {
 .heatmap {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
+  gap: 8px;
   padding-top: 8px;
 }
 
@@ -1096,37 +1096,68 @@ button.menu-item:hover {
   margin-bottom: 12px;
 }
 
-.heatmap .day {
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
+/* Each history cell is a labeled day: weekday on top, date number in the
+   middle, and the month abbreviation underneath when it changes -- readable
+   at a glance instead of an anonymous square. */
+.heatmap .hist-day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 2px;
+  width: 44px;
+  padding: 6px 2px 4px;
+  border-radius: 8px;
+  border: 1.5px solid var(--border);
   background: var(--paper-dim);
+  color: var(--muted);
 }
 
-.heatmap .day.level-0 {
-  background: var(--paper-dim);
+.heatmap .hist-day-dow {
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
 }
 
-.heatmap .day.level-1 {
-  background: #cfd9c4;
+.heatmap .hist-day-num {
+  font-size: 1rem;
+  font-weight: 800;
+  line-height: 1.1;
+  color: var(--ink);
 }
 
-.heatmap .day.level-2 {
-  background: #93a884;
+.heatmap .hist-day-mon {
+  font-size: 0.55rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  min-height: 0.7em;
 }
 
-.heatmap .day.level-3 {
+/* A day the habit was done: filled green with white figures. */
+.heatmap .hist-day.is-done {
   background: var(--secondary);
+  border-color: var(--secondary);
+  color: #fff;
 }
 
-.heatmap .day.is-editable {
+.heatmap .hist-day.is-done .hist-day-num,
+.heatmap .hist-day.is-done .hist-day-dow,
+.heatmap .hist-day.is-done .hist-day-mon {
+  color: #fff;
+}
+
+.heatmap .hist-day.is-today {
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.heatmap .hist-day.is-editable {
   cursor: pointer;
-  box-shadow: inset 0 0 0 1px var(--border);
 }
 
-.heatmap .day.is-editable:hover,
-.heatmap .day.is-editable:focus-visible {
-  box-shadow: inset 0 0 0 2px var(--accent);
+.heatmap .hist-day.is-editable:hover,
+.heatmap .hist-day.is-editable:focus-visible {
+  border-color: var(--accent);
   outline: none;
 }
 

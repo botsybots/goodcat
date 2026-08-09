@@ -3092,16 +3092,6 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
   const histHeatmap = document.getElementById('histHeatmap');
   histClose.addEventListener('click', ()=>{ histModal.style.display='none'; histHeatmap.innerHTML=''; });
 
-  function getLastNDates(n){
-    const out = [];
-    const today = getEffectiveNow();
-    for(let i = n-1;i>=0;i--){
-      const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - i);
-      out.push(localDateKey(d));
-    }
-    return out;
-  }
-
   // Marks (or unmarks) one specific PAST date as done -- for backfilling a
   // day you genuinely did but forgot to log at the time. Deliberately
   // separate from toggleCommitDone(), which always operates on "today".
@@ -3148,8 +3138,28 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
 
   function renderHeatmap(entries, days, commit, onChange){
     // entries: array of YYYY-MM-DD strings OR objects {date, count}
-    const all = getLastNDates(days || 30);
+    // Clamp the window to the commitment's own lifetime: showing days from
+    // before it existed (or, for a deadline, after its due date) is just
+    // noise -- the history should only cover days the commitment was
+    // actually live. Lower bound = createdAt; upper bound = min(today,
+    // deadline) for a one-off deadline, otherwise today.
+    const today = appToday();
+    let windowEnd = today;
+    if(isDeadlineSchedule(commit) && commit.deadlineDate && commit.deadlineDate < today){
+      windowEnd = commit.deadlineDate;
+    }
+    let all = getWindowDates(windowEnd, days || 7);
+    if(commit && commit.createdAt){
+      all = all.filter(d => d >= commit.createdAt);
+    }
     histHeatmap.innerHTML = '';
+    if(all.length === 0){
+      const empty = document.createElement('p');
+      empty.className = 'small muted';
+      empty.textContent = 'No days to show yet in this range.';
+      histHeatmap.appendChild(empty);
+      return;
+    }
     const map = new Map();
     if(Array.isArray(entries)){
       entries.forEach(e=>{
@@ -3166,15 +3176,32 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
     // means something inverted (logged = bad), and whose XP/life stakes are
     // only ever charged live via /log.
     const canBackfill = commit && canEditCommit(commit) && !isTrackerSchedule(commit);
-    const today = appToday();
+    let lastMonth = null;
     all.forEach(day => {
-      const el = document.createElement('div'); el.className='day';
+      const dateObj = parseLocalDate(day);
+      const el = document.createElement('div'); el.className='hist-day';
       const count = map.get(day) || 0;
       let level = 0;
       if(count>0){
         if(maxCount <= 1) level = 1; else level = Math.ceil((count / maxCount) * 3);
       }
       el.classList.add('level-' + level);
+      if(count > 0) el.classList.add('is-done');
+      if(day === today) el.classList.add('is-today');
+
+      // Date labels -- weekday on top, day-of-month as the main figure, and
+      // the month abbreviation whenever it changes (or on the first cell) so
+      // a window spanning two months stays readable.
+      const dow = document.createElement('span'); dow.className = 'hist-day-dow';
+      dow.textContent = dateObj.toLocaleDateString('en-US', { weekday: 'short' });
+      const num = document.createElement('span'); num.className = 'hist-day-num';
+      num.textContent = String(dateObj.getDate());
+      const mon = document.createElement('span'); mon.className = 'hist-day-mon';
+      const thisMonth = dateObj.getMonth();
+      mon.textContent = (thisMonth !== lastMonth) ? dateObj.toLocaleDateString('en-US', { month: 'short' }) : '';
+      lastMonth = thisMonth;
+      el.appendChild(dow); el.appendChild(num); el.appendChild(mon);
+
       const isPast = day < today;
       if(canBackfill && isPast){
         el.classList.add('is-editable');
@@ -3202,7 +3229,7 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
     const hint = document.getElementById('histBackfillHint');
     if(hint) hint.classList.toggle('hidden', !canBackfill);
     function renderForZoom(){
-      const days = parseInt(zoomSelect.value,10) || 30;
+      const days = parseInt(zoomSelect.value,10) || 7;
       // prefer remote history if available
       if(authToken && commit.remoteId){
         fetch(apiBase() + '/api/commitments/' + commit.remoteId + '/history', { headers: { 'authorization': 'Bearer '+authToken } }).then(r=>r.ok? r.json() : Promise.resolve(null)).then(dates=>{
