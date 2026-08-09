@@ -95,6 +95,7 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
   const settingsClose = document.getElementById('settingsClose');
   const debugPanel = document.getElementById('debugPanel');
   const btnShowState = document.getElementById('btnShowState');
+  const dangerZoneSection = document.getElementById('dangerZoneSection');
   const debugState = document.getElementById('debugState');
   const debugCurrentDate = document.getElementById('debugCurrentDate');
   const debugJumpDays = document.getElementById('debugJumpDays');
@@ -158,6 +159,7 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
   const celebrationOverlay = document.getElementById('celebrationOverlay');
   const celebrationText = document.getElementById('celebrationText');
   const celebrationCat = document.getElementById('celebrationCat');
+  const appTitle = document.getElementById('appTitle');
   const tabCommitments = document.getElementById('tabCommitments');
   const tabTodos = document.getElementById('tabTodos');
   const tabShopping = document.getElementById('tabShopping');
@@ -343,6 +345,21 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
     if(tab === 'todos') fetchTodos();
     if(tab === 'shopping') fetchShoppingItems();
   }
+  // Tapping the "Good Cat" title acts as a home button -- closes whatever
+  // modal/panel is open and lands back on the main Commitments tab, scrolled
+  // to the top. Jordan asked for this since there was previously no way to
+  // get back to the main view short of a full reload.
+  function goHome(){
+    document.querySelectorAll('.panel-modal:not(.hidden)').forEach(el => el.classList.add('hidden'));
+    if(debugPanel) debugPanel.classList.add('hidden');
+    switchTab('commitments');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+  if(appTitle){
+    appTitle.addEventListener('click', goHome);
+    appTitle.addEventListener('keydown', e => { if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); goHome(); } });
+  }
+
   tabCommitments.addEventListener('click', ()=> switchTab('commitments'));
   tabTodos.addEventListener('click', ()=> switchTab('todos'));
   tabShopping.addEventListener('click', ()=> switchTab('shopping'));
@@ -894,8 +911,15 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
     ensureLifeState();
     if(livesAnna) livesAnna.textContent = `${state.lives.anna} / ${MAX_LIVES}`;
     if(livesJordan) livesJordan.textContent = `${state.lives.jordan} / ${MAX_LIVES}`;
-    updateCouncilBanner(councilAnna, councilCatAnna, ackAnna, 'anna', state.lives.anna <= 0);
-    updateCouncilBanner(councilJordan, councilCatJordan, ackJordan, 'jordan', state.lives.jordan <= 0);
+    // A family council is a joint thing -- it's called whenever EITHER
+    // person runs out of lives, not only once both have independently hit
+    // zero (that would mean whoever wasn't at zero could never even be
+    // asked to acknowledge, so the reset -- which needs both acks -- could
+    // sit unresolved indefinitely). Both banners show together so both
+    // people can acknowledge, even if only one of them is actually at 0.
+    const councilActive = state.lives.anna <= 0 || state.lives.jordan <= 0;
+    updateCouncilBanner(councilAnna, councilCatAnna, ackAnna, 'anna', councilActive);
+    updateCouncilBanner(councilJordan, councilCatJordan, ackJordan, 'jordan', councilActive);
   }
 
   function renderLevels(){
@@ -960,10 +984,12 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
     if(!state.users.find(u => u.id === currentUser)) currentUser = state.users[0]?.id || 'anna';
     commitFor.value = currentUser;
     if(userSwitch) userSwitch.textContent = userName(currentUser);
-    // Debug Tools stays Anna-only -- Jordan doesn't need it day to day, and
-    // it's exactly the kind of "testing only" control that caused real
-    // confusion when used without realizing what it actually does.
+    // Debug Tools and the Danger Zone (Start Fresh) both stay Anna-only --
+    // Jordan doesn't need either day to day, and they're exactly the kind
+    // of controls that caused real confusion when used without realizing
+    // what they actually do.
     if(btnShowState) btnShowState.style.display = currentUser === 'anna' ? '' : 'none';
+    if(dangerZoneSection) dangerZoneSection.style.display = currentUser === 'anna' ? '' : 'none';
     applyLayoutForCurrentUser();
   }
 

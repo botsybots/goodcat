@@ -67,6 +67,11 @@ h1 {
   color: var(--accent-dark);
 }
 
+#appTitle {
+  cursor: pointer;
+  width: fit-content;
+}
+
 h2 {
   margin: 0;
   font-weight: 800;

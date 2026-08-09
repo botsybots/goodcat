@@ -34,7 +34,7 @@
       </div>
       <header>
         <div class="title-wrap">
-          <h1>Good Cat 🐾</h1>
+          <h1 id="appTitle" role="button" tabindex="0" aria-label="Go to home">Good Cat 🐾</h1>
           <p class="subtitle">Stay on track, lose lives wisely, and paw each other on.</p>
           <div class="user-switch" id="userSwitch"></div>
         </div>
@@ -200,10 +200,12 @@
             <button id="btnShowState" type="button">🛠 Debug Tools</button>
           </div>
 
-          <div class="settings-section-label">Danger zone</div>
-          <div class="settings-group">
-            <button id="btnStartFresh" type="button" class="danger-btn">🗑 Start fresh (delete all habits)</button>
-            <span class="small muted">Deletes every commitment for BOTH of you -- history, comments, paws, XP, all of it -- and sets lives back to 9/9 for both people. To-dos and the shopping list are untouched. This can't be undone.</span>
+          <div id="dangerZoneSection">
+            <div class="settings-section-label">Danger zone</div>
+            <div class="settings-group">
+              <button id="btnStartFresh" type="button" class="danger-btn">🗑 Start fresh (delete all habits)</button>
+              <span class="small muted">Deletes every commitment for BOTH of you -- history, comments, paws, XP, all of it -- and sets lives back to 9/9 for both people. To-dos and the shopping list are untouched. This can't be undone.</span>
+            </div>
           </div>
         </div>
       </div>
