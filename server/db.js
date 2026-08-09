@@ -53,6 +53,16 @@ async function migrate() {
   if (!userCols.includes('boopHour')) await dbRun('ALTER TABLE users ADD COLUMN boopHour INTEGER DEFAULT 20');
   if (!userCols.includes('lastBoopSent')) await dbRun('ALTER TABLE users ADD COLUMN lastBoopSent TEXT');
   if (!userCols.includes('lastSeenAt')) await dbRun('ALTER TABLE users ADD COLUMN lastSeenAt TEXT');
+  // Lives used to live only on each person's own phone (computed from
+  // synced history, never stored here) -- that meant a change on one device
+  // could never reach the other, which is exactly what caused a real mess
+  // during a "start fresh" reset. Now the server is the single source of
+  // truth: lives is the current count, lifeLastEvaluatedDate is the
+  // day-walk watermark (mirrors the old client-side one), lifeCouncilAck is
+  // whether this person has acknowledged their own family council.
+  if (!userCols.includes('lives')) await dbRun('ALTER TABLE users ADD COLUMN lives INTEGER DEFAULT 9');
+  if (!userCols.includes('lifeLastEvaluatedDate')) await dbRun('ALTER TABLE users ADD COLUMN lifeLastEvaluatedDate TEXT');
+  if (!userCols.includes('lifeCouncilAck')) await dbRun('ALTER TABLE users ADD COLUMN lifeCouncilAck INTEGER DEFAULT 0');
 
   await dbRun(`CREATE TABLE IF NOT EXISTS commitments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -106,6 +116,24 @@ async function migrate() {
   )`);
   const completionCols = await columnNames('completion_log');
   if (!completionCols.includes('count')) await dbRun('ALTER TABLE completion_log ADD COLUMN count INTEGER DEFAULT 1');
+
+  // Life-affecting events, one row per (user, date, type) -- the UNIQUE
+  // constraint IS the write-once judgment (a given day/week only ever costs
+  // or earns a life once, the same guarantee the old client-side
+  // lifeLosses/weeklyLifeLosses/lifeGains maps gave), and the rows
+  // themselves double as the ledger the "life refunded" reconciliation logic
+  // reads back. `date` is a day (YYYY-MM-DD) for daily_loss, or that week's
+  // Monday for weekly_loss/weekly_gain.
+  await dbRun(`CREATE TABLE IF NOT EXISTS life_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    date TEXT,
+    type TEXT,
+    delta INTEGER,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, date, type),
+    FOREIGN KEY(user_id) REFERENCES users(id)
+  )`);
 
   // Push subscriptions per user.
   await dbRun(`CREATE TABLE IF NOT EXISTS push_subscriptions (
@@ -217,6 +245,7 @@ async function migrate() {
     await dbRun('DELETE FROM paw_log WHERE giver_user_id = ?', [u.id]);
     await dbRun('DELETE FROM comments WHERE user_id = ?', [u.id]);
     await dbRun('DELETE FROM push_subscriptions WHERE user_id = ?', [u.id]);
+    await dbRun('DELETE FROM life_events WHERE user_id = ?', [u.id]);
     await dbRun('DELETE FROM commitment_suggestions WHERE from_user_id = ? OR to_user_id = ?', [u.id, u.id]);
     await dbRun('DELETE FROM pause_requests WHERE requested_by = ?', [u.id]);
     await dbRun('DELETE FROM todos WHERE created_by = ?', [u.id]);

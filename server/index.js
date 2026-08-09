@@ -7,6 +7,7 @@ import webpush from 'web-push';
 import { dbAll, dbGet, dbRun } from './db.js';
 import { isScheduledDay, computeStreak, countTrackerCompliantDays, LABEL_CATEGORIES } from '../schedule-utils.js';
 import { localDateKey, nextLocalDate, prevLocalDate } from '../date-utils.js';
+import { MAX_LIVES, RESET_LIVES_AFTER_COUNCIL, clampLives, evaluateLivesForUser, evaluateAllLives, reevaluatePastDayForUser } from './lives.js';
 
 const app = express();
 app.use(cors());
@@ -182,12 +183,103 @@ app.post('/api/boop/trigger', authMiddleware, async (req,res)=>{
   }
 });
 
-// Both people's XP, so each phone can show a level badge on both panels
-// (mirrors how Lives is already shown for both people on either device).
+// Both people's XP and lives, so each phone can show both panels correctly.
+// Lives used to be purely local per-device (see server/lives.js's header
+// comment for why that was a problem); now the server evaluates them
+// on-demand right here so this is always fresh, in addition to the
+// periodic evaluateAllLives() tick below.
 app.get('/api/users', authMiddleware, async (req,res)=>{
   try{
-    const rows = await dbAll('SELECT id, name, xp FROM users');
-    res.json(rows.map(r => ({ id: r.id, name: r.name, xp: r.xp || 0 })));
+    const rows = await dbAll('SELECT id, name, xp, lives, lifeCouncilAck FROM users');
+    const users = rows.filter(r => ['anna','jordan'].includes((r.name||'').toLowerCase()));
+    for(const u of users) await evaluateLivesForUser(u.id);
+    const result = await Promise.all(users.map(async u => {
+      const fresh = await dbGet('SELECT xp, lives, lifeCouncilAck FROM users WHERE id = ?', [u.id]);
+      const lastEvent = await dbGet('SELECT date, type, delta, created_at as createdAt FROM life_events WHERE user_id = ? ORDER BY id DESC LIMIT 1', [u.id]);
+      return {
+        id: u.id, name: u.name, xp: fresh.xp || 0,
+        lives: fresh.lives == null ? MAX_LIVES : fresh.lives,
+        maxLives: MAX_LIVES,
+        councilAck: !!fresh.lifeCouncilAck,
+        lastLifeEvent: lastEvent || null
+      };
+    }));
+    res.json(result);
+  }catch(e){
+    console.error('GET /api/users error', e);
+    res.status(500).json({ error: 'db' });
+  }
+});
+
+// Debug/self-service: set your own lives directly (clamped). Replaces the
+// old client-only "Set my lives" debug tool now that lives live server-side.
+app.post('/api/lives/set', authMiddleware, async (req,res)=>{
+  const { lives } = req.body;
+  if(!Number.isInteger(lives)) return res.status(400).json({ error: 'lives must be an integer' });
+  try{
+    const val = clampLives(lives);
+    await dbRun('UPDATE users SET lives = ? WHERE id = ?', [val, req.user.id]);
+    res.json({ lives: val });
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
+});
+
+// The client rolls the random 5% chance itself (right when a habit gets
+// marked done) and calls this to actually apply it once it hits -- the
+// randomness stays client-side since it's tied to that exact moment, but
+// applying it goes through the server now that lives live here. `joint`
+// grants to both people at once (one roll for a joint commitment, not a
+// second independent chance per person), matching the old client behavior.
+app.post('/api/lives/bonus', authMiddleware, async (req,res)=>{
+  const targets = req.body && req.body.joint
+    ? await dbAll("SELECT id FROM users WHERE LOWER(name) IN ('anna','jordan')")
+    : [{ id: req.user.id }];
+  try{
+    const nowIso = new Date().toISOString();
+    let granted = false;
+    for(const t of targets){
+      const row = await dbGet('SELECT lives FROM users WHERE id = ?', [t.id]);
+      if(!row || row.lives >= MAX_LIVES) continue;
+      await dbRun('UPDATE users SET lives = ? WHERE id = ?', [clampLives(row.lives + 1), t.id]);
+      await dbRun('INSERT OR IGNORE INTO life_events (user_id, date, type, delta) VALUES (?,?,?,?)', [t.id, nowIso, 'rare_bonus', 1]);
+      granted = true;
+    }
+    // Everyone involved was already at MAX_LIVES -- the client only shows
+    // the celebration when this is true, same as the old "grantedAny" check.
+    res.json({ success: true, granted });
+  }catch(e){
+    res.status(500).json({ error: 'db' });
+  }
+});
+
+// Acknowledging a family council is always about the CALLER's own council --
+// there's no target-user param, so one person can never ack the other's
+// (the old client-only version technically allowed this since both ack
+// buttons lived on the same shared local state; that was never exploitable
+// since nothing was actually shared, but now that this is real cross-device
+// state, only self-ack makes sense). Once BOTH have acked, resets both to
+// RESET_LIVES_AFTER_COUNCIL and clears both flags.
+app.post('/api/lives/council-ack', authMiddleware, async (req,res)=>{
+  try{
+    await dbRun('UPDATE users SET lifeCouncilAck = 1 WHERE id = ?', [req.user.id]);
+    const users = await dbAll("SELECT id, lifeCouncilAck FROM users WHERE LOWER(name) IN ('anna','jordan')");
+    const bothAcked = users.length === 2 && users.every(u => u.lifeCouncilAck);
+    if(bothAcked){
+      // A plain INSERT (not the usual write-once helper) with the current
+      // timestamp as the "date" -- this isn't a delta to apply on top of
+      // whatever lives currently are, it's a direct set, and unlike a daily
+      // loss/gain there's no calendar day to key off that would sensibly
+      // dedupe repeat councils. Recorded for BOTH people so whoever acked
+      // first (and isn't looking right now) also finds out on their next
+      // sync, not just whoever happened to trigger the second ack.
+      const nowIso = new Date().toISOString();
+      for(const u of users){
+        await dbRun('UPDATE users SET lives = ?, lifeCouncilAck = 0 WHERE id = ?', [RESET_LIVES_AFTER_COUNCIL, u.id]);
+        await dbRun('INSERT INTO life_events (user_id, date, type, delta) VALUES (?,?,?,?)', [u.id, nowIso, 'council_reset', RESET_LIVES_AFTER_COUNCIL]);
+      }
+    }
+    res.json({ acked: true, bothAcked });
   }catch(e){
     res.status(500).json({ error: 'db' });
   }
@@ -426,6 +518,19 @@ app.put('/api/commitments/:id/history/:date', authMiddleware, async (req,res)=>{
       achievedAt = null;
     }
     await dbRun('UPDATE commitments SET streak = ?, lastDone = ?, achieved = ?, achievedAt = ? WHERE id = ?', [newStreak, newLast, achieved?1:0, achievedAt, id]);
+
+    // Refunds a life if this backfilled day (or its week, for a
+    // weekly-target schedule) had already cost one and is now fully
+    // compliant -- see reevaluatePastDayForUser()'s comment. Only the
+    // done-and-wasn't-before direction can ever refund anything.
+    if(done && !wasDone){
+      if(owner.scope === 'joint'){
+        const bothUsers = await dbAll("SELECT id FROM users WHERE LOWER(name) IN ('anna','jordan')");
+        for(const u of bothUsers) await reevaluatePastDayForUser(u.id, date);
+      } else {
+        await reevaluatePastDayForUser(owner.user_id, date);
+      }
+    }
 
     // Same 10 XP as marking a habit done/undone live -- a backfilled day
     // that genuinely happened earns the same credit, just late.
@@ -828,7 +933,8 @@ app.post('/api/me/reset', authMiddleware, async (req,res)=>{
       "UPDATE commitments SET streak = 0, doneToday = 0, lastDone = NULL, achieved = 0, achievedAt = NULL, lastReminderSent = NULL WHERE user_id = ? AND scope != 'joint'",
       [req.user.id]
     );
-    await dbRun('UPDATE users SET xp = 0, lastProgressReset = ? WHERE id = ?', [new Date().toISOString(), req.user.id]);
+    await dbRun('UPDATE users SET xp = 0, lives = ?, lifeCouncilAck = 0, lastProgressReset = ? WHERE id = ?', [MAX_LIVES, new Date().toISOString(), req.user.id]);
+    await dbRun('DELETE FROM life_events WHERE user_id = ?', [req.user.id]);
     res.json({ success: true });
   }catch(e){
     console.error('POST /api/me/reset error', e);
@@ -839,13 +945,10 @@ app.post('/api/me/reset', authMiddleware, async (req,res)=>{
 // "Start fresh" -- a genuine joint wipe, unlike /api/me/reset above: deletes
 // every commitment for BOTH people (personal and joint), along with their
 // history/comments/paws/pending pause-requests, plus any pending
-// suggestions, and zeroes both people's XP. Deliberately not scoped to the
-// caller's own data -- this is for "we agreed to start over," not a
-// per-person escape hatch, so no cooldown either. Leaves accounts, todos,
-// and the shopping list untouched. Lives aren't touched here since they're
-// purely client-side -- the client mirrors this locally for whoever
-// triggered it, and the other person needs to tap the same button once on
-// their own device.
+// suggestions, and zeroes both people's XP and resets both people's lives
+// to MAX_LIVES. Deliberately not scoped to the caller's own data -- this is
+// for "we agreed to start over," not a per-person escape hatch, so no
+// cooldown either. Leaves accounts, todos, and the shopping list untouched.
 app.post('/api/reset-everything', authMiddleware, async (req,res)=>{
   try{
     const commits = await dbAll('SELECT id FROM commitments');
@@ -857,7 +960,8 @@ app.post('/api/reset-everything', authMiddleware, async (req,res)=>{
     }
     await dbRun('DELETE FROM commitments');
     await dbRun('DELETE FROM commitment_suggestions');
-    await dbRun('UPDATE users SET xp = 0');
+    await dbRun('UPDATE users SET xp = 0, lives = ?, lifeCouncilAck = 0, lifeLastEvaluatedDate = NULL', [MAX_LIVES]);
+    await dbRun('DELETE FROM life_events');
     res.json({ success: true });
   }catch(e){
     console.error('POST /api/reset-everything error', e);
@@ -1258,6 +1362,13 @@ async function checkBoop(){
 
 setInterval(checkBoop, 60 * 1000);
 checkBoop();
+
+// Lives only ever change based on a day that's already fully over (see
+// evaluateLivesForUser's "never judge today" rule), so this doesn't need
+// minute-level granularity -- every 15 minutes is plenty, on top of the
+// on-demand evaluation GET /api/users already does for freshness.
+setInterval(evaluateAllLives, 15 * 60 * 1000);
+evaluateAllLives();
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, ()=>console.log('API listening on', PORT));

@@ -221,17 +221,6 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
 
   let authToken = localStorage.getItem('accountability:token') || null;
   let syncIntervalId = null;
-  // On every page load, setToken() fires off runSync() without awaiting it,
-  // then execution falls straight through to the initial renderList() call
-  // below -- which runs on whatever was last cached in localStorage, before
-  // that sync's fetch has come back. updateLivesForUser() only ever judges
-  // a given day once (state.lifeLosses[userId][dayKey] latches permanently),
-  // so if that first, stale-data render judged a day as missed using
-  // out-of-date history for the OTHER person's commitments, the second
-  // render -- moments later, with the real synced data -- could never undo
-  // it. This flag makes updateLivesForUser() wait for the first successful
-  // sync of this page load before judging anything, in remote mode.
-  let hasSyncedThisPageLoad = false;
   if(authToken){
     const payload = decodeJwtPayload(authToken);
     if(payload) adoptIdentityFromLogin(payload);
@@ -515,10 +504,23 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
   ];
   function maybeTriggerRareEvent(userId){
     if(Math.random() >= RARE_EVENT_CHANCE) return;
-    ensureLifeState();
     // A joint commitment rolls once, not once per person -- if it hits,
     // it's a bonus life for both of you, not a second independent chance.
-    const targets = userId === 'both' ? ['anna','jordan'] : [userId];
+    const isJoint = userId === 'both';
+    if(isRemoteMode()){
+      fetch(apiBase() + '/api/lives/bonus', {
+        method: 'POST', headers: { 'content-type':'application/json', authorization: 'Bearer '+authToken },
+        body: JSON.stringify({ joint: isJoint })
+      }).then(async res => {
+        if(!res.ok) return;
+        const j = await res.json();
+        if(!j.granted) return; // everyone involved was already at MAX_LIVES
+        setTimeout(()=> showCelebration(pick(RARE_EVENT_MESSAGES), { catImage: pickCatImage('playful') }), 2800);
+      }).catch(()=>{});
+      return;
+    }
+    ensureLifeState();
+    const targets = isJoint ? ['anna','jordan'] : [userId];
     let grantedAny = false;
     targets.forEach(t=>{
       if(state.lives[t] < MAX_LIVES){
@@ -600,6 +602,15 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
     }
   }
 
+  // In remote mode, state.lives/lifeCouncilAck are just a cache of the
+  // server's answer (see fetchUsersStatus()) -- the lifeLastEvaluatedDate/
+  // lifeGains/lifeLosses/weeklyLifeLosses dictionaries below are local-mode-
+  // only bookkeeping now (server/lives.js has its own equivalents). This
+  // still runs unconditionally either way, so an early render (before the
+  // first sync lands) always has something sane to display.
+  // lastShownLifeEventAt is remote-mode-only: a pure local dedup marker
+  // (not a source of truth) so this device only toasts about a server-side
+  // life event once, however many times it shows up in a sync.
   function ensureLifeState(){
     if(!state.lives) state.lives = { anna: START_LIVES, jordan: START_LIVES };
     state.lives.anna = Math.min(MAX_LIVES, Math.max(0, state.lives.anna));
@@ -609,6 +620,8 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
     if(!state.lifeLosses) state.lifeLosses = { anna: {}, jordan: {} };
     if(!state.weeklyLifeLosses) state.weeklyLifeLosses = { anna: {}, jordan: {} };
     if(!state.lifeCouncilAck) state.lifeCouncilAck = { anna: false, jordan: false };
+    if(!state.lastShownLifeEventAt) state.lastShownLifeEventAt = { anna: null, jordan: null };
+    if(!state.lifeEventBaselineSet) state.lifeEventBaselineSet = { anna: false, jordan: false };
   }
 
   // Day-based commitments only (daily/weekdays/custom) — "N times a week"
@@ -699,24 +712,6 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
     }
   }
 
-  // Sweeps every ALREADY-recorded loss for a user and refunds any that no
-  // longer hold up against current data -- the general-purpose version of
-  // reevaluatePastDay(), run automatically on every sync rather than only
-  // when someone manually backfills a specific day. This exists because
-  // fixing the stale-cache race in updateLivesForUser() only stops NEW false
-  // losses; it does nothing for one that already got permanently recorded
-  // before that fix shipped (or from the rarer case that fix doesn't cover --
-  // the other person's own device being slow to push). Safe to run
-  // repeatedly: a genuinely still-missing day simply won't pass the
-  // compliance check and stays exactly as recorded.
-  function reconcileStaleLifeLosses(userId){
-    ensureLifeState();
-    const dayKeys = Object.keys(state.lifeLosses[userId] || {});
-    const weekKeys = Object.keys(state.weeklyLifeLosses[userId] || {});
-    const allDays = new Set([...dayKeys, ...weekKeys]);
-    allDays.forEach(dayIso => reevaluatePastDayForOneUser(userId, dayIso));
-  }
-
   function getWindowDates(endDate, windowSize = 7){
     const dates = [];
     let cursor = parseLocalDate(endDate);
@@ -728,13 +723,12 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
     return dates;
   }
 
+  // Local/offline-mode only now -- in remote mode, lives are evaluated
+  // server-side (see server/lives.js) and this device just displays whatever
+  // the last sync brought back (see fetchUsersStatus()), so this whole
+  // day-walk is skipped there entirely.
   function updateLivesForUser(userId){
-    // See hasSyncedThisPageLoad's declaration -- judging a day before this
-    // device's own commitments (and, more importantly, the other person's)
-    // have actually finished syncing risks a permanent false judgment from
-    // stale data. In local-only/offline mode there's no other device's data
-    // to be stale about, so this never applies.
-    if(isRemoteMode() && !hasSyncedThisPageLoad) return;
+    if(isRemoteMode()) return;
     ensureLifeState();
     const today = appToday();
     const yesterday = prevLocalDate(today);
@@ -826,7 +820,34 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
     save(state);
   }
 
-  function processCouncilAcknowledgement(userId){
+  // In remote mode this is always about the CALLER's own council -- the
+  // server enforces that too (POST /api/lives/council-ack always acks the
+  // caller, there's no target-user param), so this rejects the "wrong"
+  // button before even making the request. Local/offline mode has no such
+  // concept (one shared device, either column is fair game) and behaves
+  // exactly as it always did.
+  async function processCouncilAcknowledgement(userId){
+    if(isRemoteMode()){
+      if(userId !== currentUser){
+        showToast('Not yours to acknowledge', `Only ${userName(userId)} can acknowledge this council.`);
+        return;
+      }
+      try{
+        const res = await fetch(apiBase() + '/api/lives/council-ack', { method:'POST', headers:{ authorization:'Bearer '+authToken } });
+        if(!res.ok){ showToast('Not this time', 'Could not acknowledge -- try again in a moment.'); return; }
+        const j = await res.json();
+        if(!j.bothAcked) showToast('Acknowledged', 'Waiting for the other person to acknowledge too.');
+        // Don't show "Family council complete" here directly even if
+        // bothAcked -- fetchUsersStatus()'s normal event-diffing shows it,
+        // so whoever acked FIRST (and might be looking at a different
+        // device right now) gets told too, not just whoever completes it.
+        await fetchUsersStatus();
+      }catch(e){
+        showToast('Offline?', 'Could not reach the server.');
+      }
+      return;
+    }
+    ensureLifeState();
     state.lifeCouncilAck[userId] = true;
     if(state.lifeCouncilAck.anna && state.lifeCouncilAck.jordan){
       state.lives.anna = RESET_LIVES_AFTER_COUNCIL;
@@ -843,7 +864,11 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
   // switches from hidden to showing -- renderLives() runs on nearly every
   // render (any toggle, any sync), so re-picking unconditionally here would
   // change the face while someone's just scrolling, not on a new event.
-  function updateCouncilBanner(bannerEl, catImgEl, isActive){
+  // In remote mode, only the person the council is actually about can
+  // acknowledge it (see processCouncilAcknowledgement) -- disabling the
+  // other person's button here avoids a confusing "I tapped it and nothing
+  // happened."
+  function updateCouncilBanner(bannerEl, catImgEl, ackBtn, userId, isActive){
     if(!bannerEl) return;
     const wasActive = !bannerEl.classList.contains('hidden');
     bannerEl.classList.toggle('hidden', !isActive);
@@ -858,14 +883,19 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
         catImgEl.classList.remove('hidden');
       }
     }
+    if(ackBtn){
+      const canAck = !isRemoteMode() || userId === currentUser;
+      ackBtn.disabled = !canAck;
+      ackBtn.title = canAck ? '' : `Only ${userName(userId)} can acknowledge this.`;
+    }
   }
 
   function renderLives(){
     ensureLifeState();
     if(livesAnna) livesAnna.textContent = `${state.lives.anna} / ${MAX_LIVES}`;
     if(livesJordan) livesJordan.textContent = `${state.lives.jordan} / ${MAX_LIVES}`;
-    updateCouncilBanner(councilAnna, councilCatAnna, state.lives.anna <= 0);
-    updateCouncilBanner(councilJordan, councilCatJordan, state.lives.jordan <= 0);
+    updateCouncilBanner(councilAnna, councilCatAnna, ackAnna, 'anna', state.lives.anna <= 0);
+    updateCouncilBanner(councilJordan, councilCatJordan, ackJordan, 'jordan', state.lives.jordan <= 0);
   }
 
   function renderLevels(){
@@ -1823,7 +1853,6 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
       if(authGate) authGate.classList.remove('hidden');
       lockIdentityControls(false);
       if(syncIntervalId){ clearInterval(syncIntervalId); syncIntervalId = null; }
-      hasSyncedThisPageLoad = false;
       wellbeingCategory = null;
       renderWellbeingPrompt();
       fetchTodos();
@@ -1927,15 +1956,66 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
     for(const c of unsynced) await pushCommitmentToServer(c);
   }
 
-  async function fetchUsersXp(){
+  // Shows a toast for a server-side life event this device hasn't shown
+  // yet -- this is what surfaces a change made on the OTHER device (the
+  // other person's phone, or the family council completing while this
+  // device wasn't looking), not just ones this device itself triggered
+  // (those already show their own toast synchronously at the point of
+  // action). The very first check EVER (tracked separately from "has this
+  // device seen a non-null event yet" -- a debug lives-set or a fresh
+  // account can go through several real checks with no event at all)
+  // just establishes a baseline silently, otherwise shipping this would
+  // immediately re-announce whatever already happened before this device
+  // ever knew to look.
+  function maybeShowLifeEventToast(event){
+    ensureLifeState();
+    const isFirstCheckEver = !state.lifeEventBaselineSet[currentUser];
+    state.lifeEventBaselineSet[currentUser] = true;
+    if(!event){ save(state); return; }
+    const key = `${event.date}|${event.type}|${event.createdAt}`;
+    if(state.lastShownLifeEventAt[currentUser] === key){ save(state); return; }
+    state.lastShownLifeEventAt[currentUser] = key;
+    save(state);
+    if(isFirstCheckEver) return;
+    if(event.type === 'daily_loss' || event.type === 'weekly_loss'){
+      const cat = pickCatImage('judging');
+      playSound('meow');
+      const what = event.type === 'weekly_loss' ? 'missed a weekly target last week' : 'missed a scheduled habit yesterday';
+      showToast(`${cat ? cat.name : 'Bots'} is judging you`, `${userName(currentUser)} ${what} — lost 1 life.`, cat);
+    } else if(event.type === 'weekly_gain'){
+      const cat = pickCatImage('pleased');
+      showToast(`${cat ? cat.name : 'Loki'} is pleased with ` + userName(currentUser), `Kept up with scheduled habits this past week — gained ${event.delta} ${event.delta === 1 ? 'life' : 'lives'}!`, cat);
+    } else if(event.type === 'refund' || event.type === 'weekly_refund'){
+      showToast('Life refunded', `${userName(currentUser)} — that ${event.type === 'weekly_refund' ? "week's" : "day's"} fully caught up now, so the life lost for it has been given back.`);
+    } else if(event.type === 'council_reset'){
+      showToast('Family council complete', 'Lives have been reset to 3 for both people.');
+    }
+    // 'rare_bonus' is deliberately silent here -- maybeTriggerRareEvent()
+    // already celebrated it synchronously the moment it happened; this is
+    // just marking it seen so it doesn't also show up as "new" forever.
+  }
+
+  // Pulls both people's XP and current lives from the server -- lives are
+  // now evaluated server-side (see server/lives.js), so this is also what
+  // keeps this device's displayed lives current in remote mode.
+  async function fetchUsersStatus(){
     try{
       const res = await fetch(apiBase() + '/api/users', { headers: { authorization: 'Bearer '+authToken } });
       if(!res.ok) return;
       const list = await res.json();
+      ensureLifeState();
       state.usersXp = state.usersXp || {};
-      for(const u of list) state.usersXp[(u.name||'').toLowerCase()] = u.xp || 0;
+      for(const u of list){
+        const uid = (u.name||'').toLowerCase();
+        state.usersXp[uid] = u.xp || 0;
+        if(uid === 'anna' || uid === 'jordan'){
+          state.lives[uid] = u.lives != null ? u.lives : MAX_LIVES;
+          if(uid === currentUser) maybeShowLifeEventToast(u.lastLifeEvent);
+        }
+      }
       save(state);
       renderLevels();
+      renderLives();
     }catch(e){ /* non-critical */ }
   }
 
@@ -2359,7 +2439,7 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
   // Pays out each tracker's daily XP trickle since it was last credited --
   // piggybacks on the regular sync cycle rather than its own timer, since
   // there's no way to earn it faster than that anyway (it's calendar days
-  // elapsed, not actions taken). Must run before fetchUsersXp() so its
+  // elapsed, not actions taken). Must run before fetchUsersStatus() so its
   // payout is already reflected in the number that call brings back.
   async function syncTrackerXp(){
     const trackers = state.commitments.filter(c => isTrackerSchedule(c) && c.remoteId && (c.for === currentUser || c.for === 'both'));
@@ -2391,16 +2471,9 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
       state.commitments = state.commitments.filter(c => !c.remoteId || remoteIds.has(c.remoteId));
       checkAllTrackerMilestones();
       await syncTrackerXp();
-      hasSyncedThisPageLoad = true;
-      // Now that we have fresh, trustworthy data, sweep for and refund any
-      // previously-recorded loss that no longer holds up against it -- see
-      // reconcileStaleLifeLosses()'s comment for why this is still needed
-      // even with the stale-cache race itself fixed.
-      reconcileStaleLifeLosses('anna');
-      reconcileStaleLifeLosses('jordan');
       save(state);
       renderList();
-      fetchUsersXp();
+      fetchUsersStatus();
       fetchSuggestions();
       fetchPauseRequests();
       fetchWellbeingPrompt();
@@ -2458,6 +2531,10 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
     });
   }
 
+  // Jumping the date forward is a client-only illusion (nothing about it
+  // reaches the server), so in remote mode it still previews streaks and
+  // schedule display correctly, but lives won't move -- those are evaluated
+  // server-side now against the real date (see server/lives.js).
   if(btnDebugJump){
     btnDebugJump.addEventListener('click', ()=>{
       const n = parseInt(debugJumpDays.value, 10);
@@ -2479,22 +2556,36 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
   }
 
   if(btnDebugRunCheck){
-    btnDebugRunCheck.addEventListener('click', ()=>{
-      updateLivesForUser('anna');
-      updateLivesForUser('jordan');
+    btnDebugRunCheck.addEventListener('click', async ()=>{
+      if(isRemoteMode()){
+        // Lives are evaluated server-side on a timer (plus on-demand inside
+        // GET /api/users) now -- this just forces a fresh fetch rather than
+        // re-running any evaluation locally.
+        await fetchUsersStatus();
+      } else {
+        updateLivesForUser('anna');
+        updateLivesForUser('jordan');
+      }
       renderList();
       toggleDebugPanel(true);
     });
   }
 
   if(btnDebugSetLives){
-    btnDebugSetLives.addEventListener('click', ()=>{
+    btnDebugSetLives.addEventListener('click', async ()=>{
       ensureLifeState();
       // Only ever writes currentUser's own lives -- see updateDebugToolsDisplay
       // for why the other field is read-only.
       const ownInput = currentUser === 'anna' ? debugLivesAnna : debugLivesJordan;
       const val = parseInt(ownInput.value, 10);
-      if(!Number.isNaN(val)) state.lives[currentUser] = Math.min(MAX_LIVES, Math.max(0, val));
+      if(Number.isNaN(val)){ toggleDebugPanel(true); return; }
+      const clamped = Math.min(MAX_LIVES, Math.max(0, val));
+      if(isRemoteMode()){
+        try{
+          await fetch(apiBase() + '/api/lives/set', { method:'POST', headers:{ 'content-type':'application/json', authorization:'Bearer '+authToken }, body: JSON.stringify({ lives: clamped }) });
+        }catch(e){ showToast('Offline?', 'Could not reach the server.'); return; }
+      }
+      state.lives[currentUser] = clamped;
       save(state);
       renderLives();
       toggleDebugPanel(true);
@@ -2829,10 +2920,10 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
   detailModal.addEventListener('click', e => { if(e.target === detailModal) detailModal.classList.add('hidden'); });
 
   // --- Reset my progress: for trying the app out and wanting a clean
-  // slate. Wipes server-side streak/history/XP for the caller's own
-  // commitments, then mirrors that locally -- including fast-forwarding
-  // the life ledger's "last evaluated" date to yesterday, so it doesn't
-  // replay the (now-empty) history as a string of missed days. ---
+  // slate. Wipes server-side streak/history/XP/lives for the caller's own
+  // commitments, then mirrors lives locally for instant feedback -- the
+  // full picture (including the other person's view, if this affected
+  // anything of theirs) settles in via the runSync() below. ---
   if(btnResetProgress){
     btnResetProgress.addEventListener('click', async ()=>{
       if(!authToken) return alert('Login first.');
@@ -2861,11 +2952,6 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
         }
       });
       state.lives[currentUser] = MAX_LIVES;
-      state.lifeLastEvaluatedDate[currentUser] = prevLocalDate(appToday());
-      state.lifeGains[currentUser] = {};
-      state.lifeLosses[currentUser] = {};
-      state.weeklyLifeLosses[currentUser] = {};
-      state.lifeCouncilAck[currentUser] = false;
       state.usersXp = state.usersXp || {};
       state.usersXp[currentUser] = 0;
       save(state);
@@ -2877,12 +2963,10 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
   }
 
   // --- Start fresh: a genuine joint wipe, not scoped to just the caller --
-  // deletes every commitment for BOTH people server-side, then clears this
-  // device's local commitments and resets BOTH people's local life state to
-  // 9/9. Lives are purely client-side (see updateLivesForUser), so this only
-  // ever fixes what THIS device shows -- the other person needs to tap the
-  // same button once on their own phone too (harmless to run twice: the
-  // second call just finds nothing left to delete). ---
+  // deletes every commitment for BOTH people server-side and resets both
+  // people's lives/XP to 9/9 and 0 there too. Lives are server-authoritative
+  // now, so the OTHER person's device picks this up automatically on their
+  // next sync -- no separate manual step needed on their end anymore. ---
   if(btnStartFresh){
     btnStartFresh.addEventListener('click', async ()=>{
       if(!authToken) return alert('Login first.');
@@ -2901,19 +2985,12 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
 
       ensureLifeState();
       state.commitments = [];
-      ['anna','jordan'].forEach(u=>{
-        state.lives[u] = MAX_LIVES;
-        state.lifeLastEvaluatedDate[u] = prevLocalDate(appToday());
-        state.lifeGains[u] = {};
-        state.lifeLosses[u] = {};
-        state.weeklyLifeLosses[u] = {};
-        state.lifeCouncilAck[u] = false;
-      });
+      state.lives = { anna: MAX_LIVES, jordan: MAX_LIVES };
       state.usersXp = { anna: 0, jordan: 0 };
       save(state);
       renderList();
       toggleDebugPanel(false);
-      showToast('Fresh start', 'All habits are gone and lives are back to 9/9. The other person should tap "Start fresh" once on their own phone too.');
+      showToast('Fresh start', 'All habits are gone and lives are back to 9/9 for both of you.');
       runSync();
     });
   }
@@ -2966,7 +3043,10 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
   // day you genuinely did but forgot to log at the time. Deliberately
   // separate from toggleCommitDone(), which always operates on "today".
   // Refunds a life via reevaluatePastDay() if that day (or its week, for a
-  // weekly-target schedule) had already cost one and is now fully compliant.
+  // weekly-target schedule) had already cost one and is now fully compliant
+  // -- local-mode only; in remote mode the server's PUT .../history/:date
+  // handler does this refund itself (see reevaluatePastDayForUser in
+  // server/lives.js), and fetchUsersStatus() below picks up the result.
   async function toggleHistoryDate(commit, dayIso, markDone){
     if(!canEditCommit(commit)){
       showToast('Not yours to edit', `Only ${userName(commit.for)} can edit "${commit.text}"'s history.`);
@@ -2978,7 +3058,7 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
     else if(!markDone && idx >= 0) commit.history.splice(idx, 1);
     else return; // already in the requested state
     updateCommitStatusFromHistory(commit);
-    if(markDone) reevaluatePastDay(commit.for, dayIso);
+    if(markDone && !isRemoteMode()) reevaluatePastDay(commit.for, dayIso);
     save(state);
     renderList();
     showToast(markDone ? 'Marked done' : 'Marked undone', `Updated ${dayIso} for "${commit.text}".`);
@@ -2997,6 +3077,7 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
             renderLevels();
           }
           save(state);
+          if(markDone) fetchUsersStatus();
         }
       }catch(e){ console.error('backfill push failed', e); }
     }
