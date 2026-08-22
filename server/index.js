@@ -261,9 +261,11 @@ app.post('/api/lives/bonus', authMiddleware, async (req,res)=>{
     const nowIso = new Date().toISOString();
     let granted = false;
     for(const t of targets){
-      const row = await dbGet('SELECT lives FROM users WHERE id = ?', [t.id]);
-      if(!row || row.lives >= MAX_LIVES) continue;
-      await dbRun('UPDATE users SET lives = ? WHERE id = ?', [clampLives(row.lives + 1), t.id]);
+      // Atomic conditional update (checks and bumps lives in one statement)
+      // rather than read-then-write, so an overlapping request for the same
+      // person can't both decide they're under the cap and double-apply.
+      const result = await dbRun('UPDATE users SET lives = MIN(?, lives + 1) WHERE id = ? AND lives < ?', [MAX_LIVES, t.id, MAX_LIVES]);
+      if(!result.changes) continue;
       await dbRun('INSERT OR IGNORE INTO life_events (user_id, date, type, delta) VALUES (?,?,?,?)', [t.id, nowIso, 'rare_bonus', 1]);
       granted = true;
     }
@@ -637,18 +639,30 @@ app.post('/api/commitments/:id/tracker-xp', authMiddleware, async (req,res)=>{
 
     let delta = 0;
     if(from && yesterday && from <= yesterday){
-      const historyRows = await dbAll('SELECT date FROM completion_log WHERE commitment_id = ?', [id]);
-      const historyDates = historyRows.map(r => r.date);
-      delta = countTrackerCompliantDays(historyDates, from, yesterday) * TRACKER_DAILY_XP;
-      if(delta > 0){
-        const isJoint = commit.scope === 'joint';
-        if(isJoint){
-          await dbRun("UPDATE users SET xp = MAX(0, COALESCE(xp,0) + ?) WHERE LOWER(name) IN ('anna','jordan')", [delta]);
-        } else {
-          await dbRun('UPDATE users SET xp = MAX(0, COALESCE(xp,0) + ?) WHERE id = ?', [delta, req.user.id]);
+      // Claim this date range atomically FIRST, conditioned on the watermark
+      // still holding the exact value this request read -- a compare-and-
+      // swap. A joint tracker's two owners can both sync around the same
+      // moment; without this, both could read the same old watermark,
+      // independently compute the same delta, and both apply it (each
+      // UPDATE ... xp + ? is atomic on its own, but that doesn't stop the
+      // same days being paid out twice). Whichever request loses the race
+      // sees 0 rows changed here and skips awarding entirely.
+      const claim = commit.xpAwardedThroughDate
+        ? await dbRun('UPDATE commitments SET xpAwardedThroughDate = ? WHERE id = ? AND xpAwardedThroughDate = ?', [yesterday, id, commit.xpAwardedThroughDate])
+        : await dbRun('UPDATE commitments SET xpAwardedThroughDate = ? WHERE id = ? AND xpAwardedThroughDate IS NULL', [yesterday, id]);
+      if(claim.changes){
+        const historyRows = await dbAll('SELECT date FROM completion_log WHERE commitment_id = ?', [id]);
+        const historyDates = historyRows.map(r => r.date);
+        delta = countTrackerCompliantDays(historyDates, from, yesterday) * TRACKER_DAILY_XP;
+        if(delta > 0){
+          const isJoint = commit.scope === 'joint';
+          if(isJoint){
+            await dbRun("UPDATE users SET xp = MAX(0, COALESCE(xp,0) + ?) WHERE LOWER(name) IN ('anna','jordan')", [delta]);
+          } else {
+            await dbRun('UPDATE users SET xp = MAX(0, COALESCE(xp,0) + ?) WHERE id = ?', [delta, req.user.id]);
+          }
         }
       }
-      await dbRun('UPDATE commitments SET xpAwardedThroughDate = ? WHERE id = ?', [yesterday, id]);
     }
 
     const xpRow = await dbGet('SELECT xp FROM users WHERE id = ?', [req.user.id]);
@@ -1225,7 +1239,11 @@ function shouldSendReminder(commit, now){
   if(commit.lastReminderSent === todayKey) return false;
   if(!isScheduledDay(commit, todayKey)) return false;
   const [hh, mm] = commit.reminderTime.split(':').map(Number);
-  return now.getHours() === hh && now.getMinutes() === mm;
+  // "At or past" rather than an exact minute match -- Render's free tier can
+  // sleep/restart at any moment, so an exact-minute check can silently skip
+  // the whole day if the process happens to be down right then. lastReminderSent
+  // is what keeps this from re-firing once it's caught up.
+  return (now.getHours() * 60 + now.getMinutes()) >= (hh * 60 + mm);
 }
 
 function sendPushToSubscriptions(subscriptions, payload){
@@ -1267,7 +1285,10 @@ checkDueReminders();
 const END_OF_DAY_HOUR = 22;
 async function checkEndOfDayReminders(){
   const now = new Date();
-  if(now.getHours() !== END_OF_DAY_HOUR || now.getMinutes() !== 0) return;
+  // "At or past" rather than an exact minute -- see shouldSendReminder's
+  // comment; lastEndOfDaySent (checked per-user below) is what stops this
+  // from re-firing once it's caught up.
+  if(now.getHours() < END_OF_DAY_HOUR) return;
   const today = localDateKey(now);
   try{
     const users = await dbAll('SELECT id, lastEndOfDaySent FROM users');
@@ -1301,7 +1322,10 @@ checkEndOfDayReminders();
 // users.lastWeeklyCategoryCheck (the week's Monday date) so it only fires once.
 async function checkWeeklyCategoryGaps(){
   const now = new Date();
-  if(now.getDay() !== 0 || now.getHours() !== 18 || now.getMinutes() !== 0) return; // Sunday 6pm
+  // "At or past" 6pm rather than exact -- see shouldSendReminder's comment;
+  // lastWeeklyCategoryCheck (checked per-user below) stops this from
+  // re-firing once it's caught up.
+  if(now.getDay() !== 0 || now.getHours() < 18) return; // Sunday, 6pm or later
   const day = (now.getDay() + 6) % 7;
   const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day);
   const weekStartIso = localDateKey(monday);
@@ -1351,7 +1375,9 @@ async function checkBoop(){
       if(user.lastBoopSent === today) continue; // once/day cap
 
       const boopHour = Number.isInteger(user.boopHour) ? user.boopHour : DEFAULT_BOOP_HOUR;
-      const eveningTrigger = now.getHours() === boopHour && now.getMinutes() === 0;
+      // "At or past" the chosen hour rather than an exact minute -- see
+      // shouldSendReminder's comment; lastBoopSent is what caps it at once/day.
+      const eveningTrigger = now.getHours() >= boopHour;
       const daysSinceSeen = user.lastSeenAt ? (now - new Date(user.lastSeenAt)) / (1000 * 60 * 60 * 24) : Infinity;
       const inactivityTrigger = daysSinceSeen >= BOOP_INACTIVITY_DAYS;
       if(!eveningTrigger && !inactivityTrigger) continue;

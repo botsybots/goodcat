@@ -94,8 +94,12 @@ export function trackerMilestoneLabel(weeks){
 
 export function countCompletionsThisWeek(commit, refDate){
   if(!commit || !commit.history) return 0;
-  const start = localDateKey(weekStartDate(refDate));
-  const end = localDateKey(new Date(weekStartDate(refDate).getTime() + 7 * 24 * 60 * 60 * 1000));
+  const weekStart = weekStartDate(refDate);
+  const start = localDateKey(weekStart);
+  // Calendar-day arithmetic, not raw milliseconds -- a DST transition shifts
+  // wall-clock time by an hour, which millisecond math doesn't account for
+  // and could shift this onto the wrong calendar day.
+  const end = localDateKey(new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + 7));
   return (commit.history||[]).filter(d => d >= start && d < end && isScheduledDay(commit, d)).length;
 }
 
@@ -149,12 +153,14 @@ export function computeWeeklyStreak(commit, historyDates, asOfIso){
   let streak = 0;
   while(true){
     const startIso = localDateKey(weekStart);
-    const weekEnd = new Date(weekStart.getTime() + 7 * 24 * 60 * 60 * 1000);
+    // Calendar-day arithmetic, not raw milliseconds -- see
+    // countCompletionsThisWeek's comment above for why.
+    const weekEnd = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + 7);
     const endIso = localDateKey(weekEnd);
     const count = (historyDates || []).filter(d => d >= startIso && d < endIso).length;
     if(count < weeklyTarget) break;
     streak += 1;
-    weekStart = new Date(weekStart.getTime() - 7 * 24 * 60 * 60 * 1000);
+    weekStart = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() - 7);
   }
   return streak;
 }

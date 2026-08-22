@@ -51,7 +51,13 @@ async function getUserScheduledCountsForDate(userId, isoDate){
 }
 
 async function getUserWeeklyComplianceForWeek(userId, weekStartDateObj){
-  const weekEndIso = localDateKey(new Date(weekStartDateObj.getTime() + 6 * 24 * 60 * 60 * 1000));
+  // Calendar-day arithmetic (not raw milliseconds) -- a DST transition
+  // shifts wall-clock time by an hour, which millisecond math doesn't know
+  // about and could land on the wrong calendar day for it. Currently
+  // dormant since the server runs in UTC (no DST), but worth getting right
+  // regardless, and the client (a real local timezone, which does have DST)
+  // shares this exact calculation.
+  const weekEndIso = localDateKey(new Date(weekStartDateObj.getFullYear(), weekStartDateObj.getMonth(), weekStartDateObj.getDate() + 6));
   const rows = await dbAll(
     "SELECT id, schedule, scheduleDays, weeklyTarget, createdAt FROM commitments WHERE (user_id = ? OR scope = 'joint') AND enabled = 1",
     [userId]
@@ -88,10 +94,13 @@ function getWindowDates(endDateIso, windowSize = 7){
 async function recordLifeEvent(userId, dateKey, type, delta){
   const result = await dbRun('INSERT OR IGNORE INTO life_events (user_id, date, type, delta) VALUES (?,?,?,?)', [userId, dateKey, type, delta]);
   if(!result.changes) return null;
+  // Applied as a single atomic UPDATE (lives computed from the CURRENT
+  // stored value in the same statement) rather than read-then-write, so an
+  // overlapping evaluation for the same user (e.g. the periodic tick and an
+  // on-demand GET /api/users landing at the same moment) can't clobber it.
+  await dbRun('UPDATE users SET lives = MAX(0, MIN(?, lives + ?)) WHERE id = ?', [MAX_LIVES, delta, userId]);
   const row = await dbGet('SELECT lives FROM users WHERE id = ?', [userId]);
-  const newLives = clampLives((row ? row.lives : MAX_LIVES) + delta);
-  await dbRun('UPDATE users SET lives = ? WHERE id = ?', [newLives, userId]);
-  return newLives;
+  return row ? row.lives : null;
 }
 
 // Walks this user forward from their last-evaluated date up through
@@ -169,8 +178,7 @@ export async function reevaluatePastDayForUser(userId, dayIso){
     const counts = await getUserScheduledCountsForDate(userId, dayIso);
     if(counts.scheduled > 0 && counts.done >= counts.scheduled){
       await dbRun('DELETE FROM life_events WHERE id = ?', [lossRow.id]);
-      const row = await dbGet('SELECT lives FROM users WHERE id = ?', [userId]);
-      await dbRun('UPDATE users SET lives = ? WHERE id = ?', [clampLives(row.lives + 1), userId]);
+      await dbRun('UPDATE users SET lives = MIN(?, lives + 1) WHERE id = ?', [MAX_LIVES, userId]);
       // A distinct type (not 'daily_loss' again) so this shows up as its own
       // fresh event for the client's "new since last sync" toast diffing --
       // the loss row it's replacing was just deleted, so without this the
@@ -184,8 +192,7 @@ export async function reevaluatePastDayForUser(userId, dayIso){
     const compliance = await getUserWeeklyComplianceForWeek(userId, weekStartDate(parseLocalDate(dayIso)));
     if(compliance.total > 0 && compliance.compliant >= compliance.total){
       await dbRun('DELETE FROM life_events WHERE id = ?', [weekLossRow.id]);
-      const row = await dbGet('SELECT lives FROM users WHERE id = ?', [userId]);
-      await dbRun('UPDATE users SET lives = ? WHERE id = ?', [clampLives(row.lives + 1), userId]);
+      await dbRun('UPDATE users SET lives = MIN(?, lives + 1) WHERE id = ?', [MAX_LIVES, userId]);
       await dbRun('INSERT OR IGNORE INTO life_events (user_id, date, type, delta) VALUES (?,?,?,?)', [userId, weekStartIso, 'weekly_refund', 1]);
     }
   }

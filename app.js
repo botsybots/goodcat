@@ -678,7 +678,10 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
   // week's end (Sunday), and only if its weekly quota wasn't met — never on
   // the other days of the week.
   function getUserWeeklyComplianceForWeek(userId, weekStartDateObj){
-    const weekEndIso = localDateKey(new Date(weekStartDateObj.getTime() + 6 * 24 * 60 * 60 * 1000));
+    // Calendar-day arithmetic, not raw milliseconds -- a DST transition
+    // shifts wall-clock time by an hour, which millisecond math doesn't
+    // account for and could land this on the wrong calendar day.
+    const weekEndIso = localDateKey(new Date(weekStartDateObj.getFullYear(), weekStartDateObj.getMonth(), weekStartDateObj.getDate() + 6));
     const commits = state.commitments.filter(c => (c.for === userId || c.for === 'both') && c.enabled && isWeeklyTargetSchedule(c));
     let total = 0;
     let compliant = 0;
