@@ -226,7 +226,16 @@ app.get('/api/users', authMiddleware, async (req,res)=>{
   try{
     const rows = await dbAll('SELECT id, name, xp, lives, lifeCouncilAck FROM users');
     const users = rows.filter(r => ['anna','jordan'].includes((r.name||'').toLowerCase()));
-    for(const u of users) await evaluateLivesForUser(u.id);
+    // One person's evaluation throwing must not 500 the whole response --
+    // that would silently hide BOTH people's lives (including whichever one
+    // was actually fine) behind a failure that never surfaces as an error.
+    for(const u of users){
+      try{
+        await evaluateLivesForUser(u.id);
+      }catch(e){
+        console.error('evaluateLivesForUser failed for user', u.id, e);
+      }
+    }
     const result = await Promise.all(users.map(async u => {
       const fresh = await dbGet('SELECT xp, lives, lifeCouncilAck FROM users WHERE id = ?', [u.id]);
       const lastEvent = await dbGet('SELECT date, type, delta, created_at as createdAt FROM life_events WHERE user_id = ? ORDER BY id DESC LIMIT 1', [u.id]);
@@ -1427,8 +1436,20 @@ checkBoop();
 // evaluateLivesForUser's "never judge today" rule), so this doesn't need
 // minute-level granularity -- every 15 minutes is plenty, on top of the
 // on-demand evaluation GET /api/users already does for freshness.
-setInterval(evaluateAllLives, 15 * 60 * 1000);
-evaluateAllLives();
+//
+// evaluateAllLives() already catches per-user internally, but this still
+// guards the call itself (e.g. its own user-list query) -- every other
+// periodic check in this file runs inside its own try/catch for the same
+// reason: an uncaught rejection from a setInterval tick is an unhandled
+// promise rejection with nothing downstream to catch it, which recent Node
+// defaults to crashing the whole process over. That's a much worse failure
+// mode than a skipped tick, and one that would look identical to "lives
+// just silently stopped updating" from the outside.
+function safeEvaluateAllLives(){
+  evaluateAllLives().catch(e => console.error('evaluateAllLives failed', e));
+}
+setInterval(safeEvaluateAllLives, 15 * 60 * 1000);
+safeEvaluateAllLives();
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, ()=>console.log('API listening on', PORT));

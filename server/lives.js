@@ -19,6 +19,16 @@ export function clampLives(n){
   return Math.min(MAX_LIVES, Math.max(0, n));
 }
 
+// Malformed/legacy scheduleDays shouldn't take down evaluation for every
+// commitment behind it in the loop (and, before this existed, could throw
+// out of the whole per-user evaluation -- see evaluateAllLives()'s comment).
+// Treating it as "no custom days" is the same fallback used everywhere else
+// scheduleDays gets read.
+function safeParseScheduleDays(raw){
+  if(!raw) return null;
+  try{ return JSON.parse(raw); }catch(e){ return null; }
+}
+
 // Day-based commitments only (daily/weekdays/custom/deadline/tracker) --
 // "N times a week" schedules are handled separately below, once per week.
 async function getUserScheduledCountsForDate(userId, isoDate){
@@ -28,7 +38,7 @@ async function getUserScheduledCountsForDate(userId, isoDate){
   );
   let scheduled = 0, done = 0;
   for(const r of rows){
-    const commit = { schedule: r.schedule || 'daily', scheduleDays: r.scheduleDays ? JSON.parse(r.scheduleDays) : null, deadlineDate: r.deadlineDate };
+    const commit = { schedule: r.schedule || 'daily', scheduleDays: safeParseScheduleDays(r.scheduleDays), deadlineDate: r.deadlineDate };
     if(isWeeklyTargetSchedule(commit)) continue;
     const created = r.createdAt || isoDate;
     if(created > isoDate) continue;
@@ -64,7 +74,7 @@ async function getUserWeeklyComplianceForWeek(userId, weekStartDateObj){
   );
   let total = 0, compliant = 0;
   for(const r of rows){
-    const commit = { schedule: r.schedule, scheduleDays: r.scheduleDays ? JSON.parse(r.scheduleDays) : null, weeklyTarget: r.weeklyTarget };
+    const commit = { schedule: r.schedule, scheduleDays: safeParseScheduleDays(r.scheduleDays), weeklyTarget: r.weeklyTarget };
     if(!isWeeklyTargetSchedule(commit)) continue;
     const created = r.createdAt || weekEndIso;
     if(created > weekEndIso) continue;
@@ -162,9 +172,21 @@ export async function evaluateLivesForUser(userId){
   }
 }
 
+// One person's evaluation throwing (a bad row, a transient DB hiccup) must
+// never stop the other person's from running, and must never propagate out
+// of here uncaught -- this is invoked both from a bare setInterval tick and
+// from inside a request handler's loop; an unhandled rejection from either
+// context is exactly the kind of failure that looks like "lives just never
+// update" from the outside, with nothing visible telling you why.
 export async function evaluateAllLives(){
   const users = await dbAll("SELECT id FROM users WHERE LOWER(name) IN ('anna','jordan')");
-  for(const u of users) await evaluateLivesForUser(u.id);
+  for(const u of users){
+    try{
+      await evaluateLivesForUser(u.id);
+    }catch(e){
+      console.error('evaluateLivesForUser failed for user', u.id, e);
+    }
+  }
 }
 
 // Un-does a previously recorded loss if the day/week it was about is now
