@@ -178,6 +178,38 @@ app.get('/api/me', authMiddleware, async (req,res)=>{
   }
 });
 
+// Temporary diagnostic for tracking down "lives aren't updating" -- dumps
+// exactly what the server has on record for the caller's own lives
+// evaluation state and commitments (own + joint), read-only, own-account-
+// only. Not wired into any normal UI flow; meant to be removed once this
+// is chased down.
+app.get('/api/debug/lives-state', authMiddleware, async (req,res)=>{
+  try{
+    const user = await dbGet('SELECT id, name, lives, lifeLastEvaluatedDate FROM users WHERE id = ?', [req.user.id]);
+    const commits = await dbAll(
+      "SELECT id, text, enabled, schedule, scheduleDays, createdAt, scope, user_id FROM commitments WHERE user_id = ? OR scope = 'joint'",
+      [req.user.id]
+    );
+    const commitments = await Promise.all(commits.map(async c => {
+      const rows = await dbAll('SELECT date FROM completion_log WHERE commitment_id = ? ORDER BY date', [c.id]);
+      return {
+        id: c.id, text: c.text, enabled: !!c.enabled, schedule: c.schedule,
+        scheduleDaysRaw: c.scheduleDays, createdAt: c.createdAt, scope: c.scope,
+        mine: c.user_id === req.user.id, completionDates: rows.map(r => r.date)
+      };
+    }));
+    const events = await dbAll('SELECT date, type, delta, created_at as createdAt FROM life_events WHERE user_id = ? ORDER BY id DESC LIMIT 20', [req.user.id]);
+    res.json({
+      serverNow: new Date().toISOString(),
+      serverTodayLocalDateKey: localDateKey(new Date()),
+      user, commitments, recentLifeEvents: events
+    });
+  }catch(e){
+    console.error('GET /api/debug/lives-state error', e);
+    res.status(500).json({ error: String(e) });
+  }
+});
+
 // Boop settings are opt-in and per-person -- each phone reads/writes only
 // its own logged-in user's row.
 app.get('/api/boop-settings', authMiddleware, async (req,res)=>{

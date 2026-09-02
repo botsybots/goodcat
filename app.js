@@ -100,6 +100,8 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
   const btnShowState = document.getElementById('btnShowState');
   const dangerZoneSection = document.getElementById('dangerZoneSection');
   const debugState = document.getElementById('debugState');
+  const btnDebugLivesState = document.getElementById('btnDebugLivesState');
+  const debugLivesStateOutput = document.getElementById('debugLivesStateOutput');
   const debugCurrentDate = document.getElementById('debugCurrentDate');
   const debugJumpDays = document.getElementById('debugJumpDays');
   const btnDebugJump = document.getElementById('btnDebugJump');
@@ -2990,6 +2992,23 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
 
   detailClose.addEventListener('click', ()=> detailModal.classList.add('hidden'));
   detailModal.addEventListener('click', e => { if(e.target === detailModal) detailModal.classList.add('hidden'); });
+
+  // Temporary diagnostic for tracking down "lives aren't updating" -- pulls
+  // the raw server-side lives state (see GET /api/debug/lives-state) into a
+  // copyable textarea. Not meant to stick around long-term.
+  if(btnDebugLivesState){
+    btnDebugLivesState.addEventListener('click', async ()=>{
+      if(!authToken) return alert('Login first.');
+      try{
+        const res = await fetch(apiBase() + '/api/debug/lives-state', { headers:{ authorization:'Bearer '+authToken } });
+        const j = await res.json();
+        if(debugLivesStateOutput) debugLivesStateOutput.value = JSON.stringify(j, null, 2);
+        if(!res.ok) showToast('Fetch failed', 'See the output box for the error.');
+      }catch(e){
+        if(debugLivesStateOutput) debugLivesStateOutput.value = 'Request failed: ' + e;
+      }
+    });
+  }
 
   // --- Reset my progress: for trying the app out and wanting a clean
   // slate. Wipes server-side streak/history/XP/lives for the caller's own
