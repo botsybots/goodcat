@@ -6,10 +6,20 @@ name: Keep backend awake
 # Set the RENDER_APP_URL repo variable (Settings -> Secrets and variables ->
 # Actions -> Variables) to the deployed Render URL, e.g.
 # https://goodcat-api.onrender.com
+#
+# The offset minutes below (7/17/27/37/47/57, not */10) are deliberate --
+# GitHub documents that scheduled workflows queued for the top of the hour
+# and other round numbers get delayed under high load, since every repo's
+# */10 cron fires at the same instant. Confirmed against this repo's own
+# run history: on */10, actual runs landed 2-5 hours apart instead of every
+# 10 minutes, long enough for Render to fall fully asleep between pings
+# (a 26s cold-start round trip, vs sub-second when actually warm) and for
+# the server-side reminder/end-of-day/weekly-gap checks -- which only run
+# while the process is awake -- to go quiet for hours at a time.
 
 on:
   schedule:
-    - cron: '*/10 * * * *'
+    - cron: '7,17,27,37,47,57 * * * *'
   workflow_dispatch: {}
 
 jobs:
