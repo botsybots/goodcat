@@ -290,7 +290,7 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
     if(!authToken || !boopEnabledToggle) return;
     try{
       const res = await fetch(apiBase() + '/api/boop-settings', { headers: { authorization: 'Bearer '+authToken } });
-      if(!res.ok) return;
+      if(!res.ok){ if(isAuthExpiredResponse(res)) handleAuthExpired(); return; }
       const { enabled, hour } = await res.json();
       boopEnabledToggle.checked = enabled;
       if(boopHourRow) boopHourRow.style.display = enabled ? '' : 'none';
@@ -534,7 +534,7 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
         method: 'POST', headers: { 'content-type':'application/json', authorization: 'Bearer '+authToken },
         body: JSON.stringify({ joint: isJoint })
       }).then(async res => {
-        if(!res.ok) return;
+        if(!res.ok){ if(isAuthExpiredResponse(res)) handleAuthExpired(); return; }
         const j = await res.json();
         if(!j.granted) return; // everyone involved was already at MAX_LIVES
         setTimeout(()=> showCelebration(pick(RARE_EVENT_MESSAGES), { catImage: pickCatImage('playful') }), 2800);
@@ -1907,6 +1907,24 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
     }
   }
 
+  // Login tokens expire after a while (see server's sign()) -- every
+  // authenticated fetch in this file used to just do `if(!res.ok) return;`,
+  // which treated an expired/rejected token exactly like a network blip:
+  // fails silently, forever, with no sign anything's wrong. That's exactly
+  // what happened to someone who hadn't opened the app in a while -- sync
+  // silently stopped working, so lives/commitments/everything looked frozen
+  // with no error to explain why. Now a 401/403 specifically clears the
+  // stale token and reopens the login gate with an explanation, instead of
+  // quietly doing nothing forever.
+  function isAuthExpiredResponse(res){
+    return res.status === 401 || res.status === 403;
+  }
+  function handleAuthExpired(){
+    if(!authToken) return; // already logged out -- nothing to do
+    setToken(null);
+    setAuthGateStatus('Your session expired -- please log in again.');
+  }
+
   ackAnna.addEventListener('click', ()=> processCouncilAcknowledgement('anna'));
   ackJordan.addEventListener('click', ()=> processCouncilAcknowledgement('jordan'));
 
@@ -2048,7 +2066,7 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
   async function fetchUsersStatus(){
     try{
       const res = await fetch(apiBase() + '/api/users', { headers: { authorization: 'Bearer '+authToken } });
-      if(!res.ok) return;
+      if(!res.ok){ if(isAuthExpiredResponse(res)) handleAuthExpired(); return; }
       const list = await res.json();
       ensureLifeState();
       state.usersXp = state.usersXp || {};
@@ -2069,7 +2087,7 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
   async function fetchSuggestions(){
     try{
       const res = await fetch(apiBase() + '/api/suggestions', { headers: { authorization: 'Bearer '+authToken } });
-      if(!res.ok) return;
+      if(!res.ok){ if(isAuthExpiredResponse(res)) handleAuthExpired(); return; }
       state.suggestions = await res.json();
       save(state);
       renderSuggestions();
@@ -2085,7 +2103,7 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
   async function fetchPauseRequests(){
     try{
       const res = await fetch(apiBase() + '/api/pause-requests', { headers: { authorization: 'Bearer '+authToken } });
-      if(!res.ok) return;
+      if(!res.ok){ if(isAuthExpiredResponse(res)) handleAuthExpired(); return; }
       state.pauseRequests = await res.json();
       save(state);
       renderPauseRequests();
@@ -2196,7 +2214,7 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
     if(!authToken) return;
     try{
       const res = await fetch(apiBase() + '/api/wellbeing/prompt', { headers: { authorization: 'Bearer '+authToken } });
-      if(!res.ok) return;
+      if(!res.ok){ if(isAuthExpiredResponse(res)) handleAuthExpired(); return; }
       const j = await res.json();
       wellbeingCategory = j.due ? j.category : null;
       renderWellbeingPrompt();
@@ -2237,7 +2255,7 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
       if(!category) return;
       try{
         const res = await fetch(apiBase() + '/api/wellbeing/respond', { method: 'POST', headers: { 'content-type':'application/json', authorization: 'Bearer '+authToken }, body: JSON.stringify({ rating }) });
-        if(!res.ok) return;
+        if(!res.ok){ if(isAuthExpiredResponse(res)) handleAuthExpired(); return; }
       }catch(e){ return; }
       wellbeingCategory = null;
       renderWellbeingPrompt();
@@ -2259,7 +2277,7 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
     }
     try{
       const res = await fetch(apiBase() + '/api/todos', { headers: { authorization: 'Bearer '+authToken } });
-      if(!res.ok) return;
+      if(!res.ok){ if(isAuthExpiredResponse(res)) handleAuthExpired(); return; }
       state.todos = await res.json();
       renderTodos();
     }catch(e){ /* non-critical */ }
@@ -2373,7 +2391,7 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
     }
     try{
       const res = await fetch(apiBase() + '/api/shopping-items', { headers: { authorization: 'Bearer '+authToken } });
-      if(!res.ok) return;
+      if(!res.ok){ if(isAuthExpiredResponse(res)) handleAuthExpired(); return; }
       state.shoppingItems = await res.json();
       renderShoppingItems();
     }catch(e){ /* non-critical */ }
@@ -2509,7 +2527,7 @@ import { isSoundEnabled, setSoundEnabled, playSound } from './sound.js';
     try{
       await pushUnsyncedLocalCommitments();
       const res = await fetch(apiBase() + '/api/commitments', { headers: { authorization: 'Bearer '+authToken } });
-      if(!res.ok) return;
+      if(!res.ok){ if(isAuthExpiredResponse(res)) handleAuthExpired(); return; }
       const list = await res.json();
       for(const r of list) await mergeRemoteCommitment(r);
       // Drop local copies of commitments that were synced before but no

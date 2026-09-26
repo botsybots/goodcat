@@ -47,8 +47,14 @@ if(!VAPID_PUBLIC || !VAPID_PRIVATE){
 }
 webpush.setVapidDetails('mailto:notify@example.com', VAPID_PUBLIC, VAPID_PRIVATE);
 
+// 7 days was too short for an app whose whole premise is that people don't
+// always check in daily -- a real gap in usage (a busy week, a trip) meant
+// the token expired and sync silently stopped, with no error to explain why
+// (see handleAuthExpired() in app.js for the other half of that fix). This
+// app has exactly two trusted people and no password-reset-via-email to
+// fall back on anyway, so there's little security upside to a short window.
 function sign(user){
-  return jwt.sign({ id: user.id, name: user.name }, JWT_SECRET, { expiresIn: '7d' });
+  return jwt.sign({ id: user.id, name: user.name }, JWT_SECRET, { expiresIn: '90d' });
 }
 
 function authMiddleware(req,res,next){
