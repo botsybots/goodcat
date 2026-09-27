@@ -9,6 +9,21 @@ import { isScheduledDay, computeStreak, countTrackerCompliantDays, LABEL_CATEGOR
 import { localDateKey, nextLocalDate, prevLocalDate } from '../date-utils.js';
 import { MAX_LIVES, RESET_LIVES_AFTER_COUNCIL, clampLives, evaluateLivesForUser, evaluateAllLives, reevaluatePastDayForUser } from './lives.js';
 
+// Express 4 (used here) doesn't auto-catch a rejected promise from an async
+// route handler the way Express 5 does, and Node has crashed the whole
+// process on an unhandled rejection by default since v15 -- so a single
+// missed try/catch ANYWHERE (a route handler, one of the periodic
+// setInterval checks below) takes down the entire server for both people,
+// not just whatever request hit it. Every handler in this file is already
+// meant to catch its own errors, but this is the backstop for whichever one
+// isn't: log it and keep running, rather than let one bug end the process.
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection (server kept running):', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception (server kept running):', err);
+});
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -313,10 +328,10 @@ app.post('/api/lives/set', authMiddleware, async (req,res)=>{
 // grants to both people at once (one roll for a joint commitment, not a
 // second independent chance per person), matching the old client behavior.
 app.post('/api/lives/bonus', authMiddleware, async (req,res)=>{
-  const targets = req.body && req.body.joint
-    ? await dbAll("SELECT id FROM users WHERE LOWER(name) IN ('anna','jordan')")
-    : [{ id: req.user.id }];
   try{
+    const targets = req.body && req.body.joint
+      ? await dbAll("SELECT id FROM users WHERE LOWER(name) IN ('anna','jordan')")
+      : [{ id: req.user.id }];
     const nowIso = new Date().toISOString();
     let granted = false;
     for(const t of targets){
